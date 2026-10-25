@@ -53,7 +53,7 @@ In Mojo 1.1.0, these are incorporated without modifying upstream repos:
 
 ---
 
-## Implemented Subsystems (Phases 1 & 2)
+## Implemented Subsystems (Phases 1, 2 & 3)
 
 ### 1. Types & Data Layouts ([`src/llamojo/types.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/types.mojo))
 - Upstream `ggml.h` quantization enum parity: `F32 (0)`, `F16 (1)`, `Q4_0 (2)`, `Q4_1 (3)`, `Q5_0 (6)`, `Q5_1 (7)`, `Q8_0 (8)`, `Q8_1 (9)`, `Q2_K (10)`, `Q3_K (11)`, `Q4_K (12)`, `Q5_K (13)`, `Q6_K (14)`, `Q8_K (15)`, `BF16 (30)`, `MXFP4 (39)`.
@@ -92,10 +92,21 @@ In Mojo 1.1.0, these are incorporated without modifying upstream repos:
 - On-the-fly activation quantization: [`quantize_row_q8_0`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_quant.mojo#L48-L77).
 - Horizontal multi-matrix projection fusion: [`matmul_quant_fused[n]`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_quant.mojo#L309-L336) shares activation register loads across QKV ($n=3$) and Gate/Up ($n=2$).
 
-### 6. Public `llama.h` Compatibility Layer ([`src/llamojo/llama.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/llama.mojo))
-- Backend lifecycle: `llama_backend_init`, `llama_backend_free`, `llama_time_us`, `llama_print_system_info`.
-- Opaque handles: `llama_model_p` (`Pointer[llama_model, MutUntrackedOrigin]`).
-- Model initialization: `llama_model_load_from_file`, `llama_model_free`.
+### 6. KV Cache & PagedAttention PageTable ([`src/llamojo/kv_cache.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/kv_cache.mojo))
+- Unified KV Cache supporting contiguous Float32 and quantized `Q8_0` buffers.
+- Sequence metadata per slot (`LlamaKVCell: pos, seq_id`) implementing sequence manipulation:
+  - `llama_kv_cache_clear`, `llama_kv_cache_seq_rm`, `llama_kv_cache_seq_cp`, `llama_kv_cache_seq_keep`, `llama_kv_cache_seq_add`.
+- PagedAttention `PageTable` translation layer for fragmented dynamic batching.
+
+### 7. Attention & Multi-Architecture Forward Engine ([`src/llamojo/backend/kernels_attn.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_attn.mojo) & [`src/llamojo/backend/models.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/models.mojo))
+- Online numerically stable Grouped-Query Attention (`gqa_decode` / `gqa_decode_head`) supporting arbitrary head counts (`n_heads // n_kv_heads`).
+- Full multi-layer forward pass (`forward_layer_dense`) coordinating worker thread slices through the persistent spin-barrier pool.
+
+### 8. Public `llama.h` Context & Inference API ([`src/llamojo/llama.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/llama.mojo))
+- Context initialization and activation scratchpad workspace: `llama_init_from_model`, `llama_free`.
+- Batch management: `llama_batch_init`, `llama_batch_get_one`, `llama_batch_free`.
+- Inference engine: `llama_decode`, `llama_encode`.
+- Logits & embeddings extraction: `llama_get_logits`, `llama_get_logits_ith`, `llama_get_embeddings`.
 - Model reflection: `llama_model_n_embd`, `llama_model_n_layer`, `llama_model_n_head`, `llama_model_n_head_kv`, `llama_model_n_ctx_train`, `llama_model_n_vocab`, `llama_model_desc`, `llama_model_meta_val_str`.
 
 ---

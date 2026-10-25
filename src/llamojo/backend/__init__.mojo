@@ -1,4 +1,5 @@
-"""Backend package for llamojo: ISA, thread pool, quantized matmuls, and fused normalization/RoPE."""
+""" Backend package for llamojo: ISA, thread pool, quantized matmuls, fused norm/RoPE,
+attention & multi-arch forward passes."""
 
 from .isa import (
     has_avx512f,
@@ -46,6 +47,8 @@ from .kernels_norm_rope import (
     apply_rope_neox,
 )
 from .kernels_quant import (
+    BytePtr,
+    FloatPtr,
     k4_scale,
     quantize_row_q8_0,
     dot_f32_row,
@@ -61,3 +64,14 @@ from .kernels_quant import (
     dot_quant_row,
     matmul_quant_fused,
 )
+from .kernels_attn import (
+    dot_vectors,
+    axpy_vector,
+    gqa_decode_head,
+    gqa_decode,
+)
+from .models import (
+    LayerWeights,
+    forward_layer_dense,
+)
+

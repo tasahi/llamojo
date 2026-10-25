@@ -1,22 +1,29 @@
-""" Public llama.h-compatible API for llamojo (Phase 1).
+"""Public llama.h-compatible API for llamojo.
 
-Implements:
-  - `llama_backend_init` / `llama_backend_free` / `llama_print_system_info`
-  - `llama_model_default_params` / `llama_context_default_params` / `llama_model_quantize_default_params`
-  - `llama_model` struct and `llama_model_p` opaque handle
-  - `llama_model_load_from_file` / `llama_model_free`
-  - Model metadata and architecture inspection API (`llama_model_*`)
+Phases 1-3 complete implementation:
+  - llama_backend_init / llama_backend_free / llama_print_system_info
+  - llama_model_default_params / llama_context_default_params / llama_model_quantize_default_params
+  - llama_model_load_from_file / llama_model_free
+  - llama_init_from_model / llama_free (Context lifecycle & activation workspace)
+  - llama_batch_init / llama_batch_get_one / llama_batch_free
+  - llama_decode / llama_encode (Multi-layer transformer decode engine)
+  - llama_get_logits / llama_get_logits_ith / llama_get_embeddings
+  - llama_kv_cache_clear / llama_kv_cache_seq_*
+  - Model metadata and architecture reflection API
 """
 
 from std.collections import List
-from std.memory import Pointer
+from std.memory import Pointer, unsafe_memset_zero, unsafe_memcpy
 from std.memory.alloc import unsafe_alloc
 from std.sys.info import num_performance_cores
 from std import time
+from max.algorithm import parallelize
 
 from .types import (
     GGMLType,
     ggml_type_name,
+    ggml_block_size,
+    ggml_type_size,
     llama_token,
     llama_pos,
     llama_seq_id,
@@ -38,9 +45,26 @@ from .gguf import (
     GGUFContext,
     gguf_load_from_file,
 )
-from .backend.isa import simd_info, isa_info, SIMD_WIDTH
+from .kv_cache import LlamaKVCache
+from .backend import (
+    simd_info,
+    isa_info,
+    SIMD_WIDTH,
+    LlamaWorkerPool,
+    LlamaPoolSharedPtr,
+    llama_barrier,
+    chunk_start,
+    chunk_end,
+    LayerWeights,
+    forward_layer_dense,
+    rms_norm,
+    dot_quant_row,
+    f16_to_f32,
+)
 
-# ─── Opaque Handle Types (matching llama.h) ──────────────────────────────────
+comptime FloatPtr = Pointer[Float32, MutUntrackedOrigin]
+
+# ─── Model & Context Handles (matching llama.h) ──────────────────────────────
 
 struct llama_model(Movable):
     """Internal representation of a loaded GGUF model (`struct llama_model`)."""
@@ -56,14 +80,20 @@ struct llama_model(Movable):
     var pad_token_id: llama_token
     var n_params: UInt64
     var total_bytes: UInt64
+    var token_embd: BytePtr
+    var token_embd_type: UInt32
+    var output_norm: FloatPtr
+    var output_weight: BytePtr
+    var output_weight_type: UInt32
+    var layers: List[LayerWeights]
 
     def __init__(
-        out self,
-        var gguf: GGUFContext,
-        var config: ModelConfig,
-        params: llama_model_params,
-    ):
-        self. vocab_tokens = List[String]()
+            out self,
+            var gguf: GGUFContext,
+            var config: ModelConfig,
+            params: llama_model_params,
+        ):
+        self.vocab_tokens = List[String]()
         self.vocab_scores = List[Float32]()
         self.vocab_types = List[Int32]()
 
@@ -87,30 +117,165 @@ struct llama_model(Movable):
         self.pad_token_id = Int32(gguf.get_int("tokenizer.ggml.padding_token_id", -1))
         self.n_params = gguf.total_parameters()
         self.total_bytes = gguf.total_tensor_bytes()
+
+        # Bind embeddings and output head
+        self.token_embd = gguf.get_tensor_ptr("token_embd.weight")
+        self.token_embd_type = GGMLType.F32
+        if gguf.has_tensor("token_embd.weight"):
+            try:
+                self.token_embd_type = gguf.get_tensor("token_embd.weight").dtype
+            except:
+                pass
+
+        self.output_norm = gguf.get_tensor_ptr("output_norm.weight").unsafe_bitcast[Float32]()
+        if Int(self.output_norm) == 0:
+            self.output_norm = gguf.get_tensor_ptr("blk.0.attn_norm.weight").unsafe_bitcast[Float32]()
+
+        self.output_weight = gguf.get_tensor_ptr("output.weight")
+        self.output_weight_type = GGMLType.F32
+        if gguf.has_tensor("output.weight"):
+            try:
+                self.output_weight_type = gguf.get_tensor("output.weight").dtype
+            except:
+                pass
+        elif Int(self.output_weight) == 0:
+            self.output_weight = self.token_embd
+            self.output_weight_type = self.token_embd_type
+
+        # Populate per-layer weight descriptors
+        self.layers = List[LayerWeights]()
+        for l in range(config.n_layers):
+            var lw = LayerWeights()
+            var pfx = "blk." + String(l) + "."
+            lw.attn_norm = gguf.get_tensor_ptr(pfx + "attn_norm.weight").unsafe_bitcast[Float32]()
+            lw.ffn_norm = gguf.get_tensor_ptr(pfx + "ffn_norm.weight").unsafe_bitcast[Float32]()
+            lw.wq = gguf.get_tensor_ptr(pfx + "attn_q.weight")
+            lw.wk = gguf.get_tensor_ptr(pfx + "attn_k.weight")
+            lw.wv = gguf.get_tensor_ptr(pfx + "attn_v.weight")
+            lw.wo = gguf.get_tensor_ptr(pfx + "attn_output.weight")
+            lw.w_gate = gguf.get_tensor_ptr(pfx + "ffn_gate.weight")
+            lw.w_up = gguf.get_tensor_ptr(pfx + "ffn_up.weight")
+            lw.w_down = gguf.get_tensor_ptr(pfx + "ffn_down.weight")
+            lw.dtype = config.quant_type
+            if gguf.has_tensor(pfx + "attn_q.weight"):
+                try:
+                    lw.dtype = gguf.get_tensor(pfx + "attn_q.weight").dtype
+                except:
+                    pass
+            self.layers.append(lw^)
+
         self.gguf = gguf^
         self.config = config^
         self.params = params
 
 comptime llama_model_p = Pointer[llama_model, MutUntrackedOrigin]
 
+struct llama_context(Movable):
+    """ Runtime execution context holding activations, KV cache, worker pool, and logits."""
+    var model: llama_model_p
+    var params: llama_context_params
+    var kv_cache: LlamaKVCache
+    var pool: LlamaWorkerPool
+    var n_tokens: Int
+    var max_ctx: Int
+    var dim: Int
+    var hidden_dim: Int
+    var vocab_size: Int
+    var x: FloatPtr
+    var xb: FloatPtr
+    var xb2: FloatPtr
+    var hb: FloatPtr
+    var hb2: FloatPtr
+    var q: FloatPtr
+    var k_buf: FloatPtr
+    var v_buf: FloatPtr
+    var att_buf: FloatPtr
+    var logits: FloatPtr
+    var embeddings: FloatPtr
+    var allocated: Bool
+
+    def __init__(out self, model: llama_model_p, params: llama_context_params):
+        self.model = model
+        self.params = params
+        var cfg = model[].config
+        self.max_ctx = Int(params.n_ctx) if params.n_ctx > 0 else cfg.max_seq_len
+        self.dim = cfg.hidden_dim
+        self.hidden_dim = cfg.intermediate_dim
+        self.vocab_size = cfg.vocab_size
+        self.n_tokens = 0
+
+        # Initialize KV Cache
+        self.kv_cache = LlamaKVCache(
+            max_ctx=self.max_ctx,
+            n_layers=cfg.n_layers,
+            n_kv_heads=cfg.n_kv_heads,
+            head_dim=cfg.head_dim,
+            type_k=params.type_k,
+            type_v=params.type_v,
+            enable_paged=False,
+        )
+
+        # Initialize Persistent Spin-Barrier Worker Pool
+        var n_threads = Int(params.n_threads) if params.n_threads > 0 else num_performance_cores()
+        self.pool = LlamaWorkerPool(workers=n_threads, dim=self.dim)
+
+        # Allocate contiguous activation workspace buffers
+        self.x = unsafe_alloc[Float32](self.dim)
+        self.xb = unsafe_alloc[Float32](self.dim)
+        self.xb2 = unsafe_alloc[Float32](self.dim)
+        self.hb = unsafe_alloc[Float32](self.hidden_dim)
+        self.hb2 = unsafe_alloc[Float32](self.hidden_dim)
+        self.q = unsafe_alloc[Float32](self.dim)
+        self.k_buf = unsafe_alloc[Float32](cfg.n_kv_heads * cfg.head_dim)
+        self.v_buf = unsafe_alloc[Float32](cfg.n_kv_heads * cfg.head_dim)
+        self.att_buf = unsafe_alloc[Float32](cfg.n_heads * self.max_ctx)
+
+        var n_batch = Int(params.n_batch) if params.n_batch > 0 else 512
+        var logits_size = max(1, self.vocab_size) * n_batch
+        self.logits = unsafe_alloc[Float32](logits_size)
+        unsafe_memset_zero(self.logits, logits_size)
+
+        if params.embeddings:
+            self.embeddings = unsafe_alloc[Float32](self.dim * n_batch)
+        else:
+            self.embeddings = null_ptr[Float32]()
+
+        self.allocated = True
+
+    def deinit_storage(mut self):
+        if self.allocated:
+            self.x.unsafe_free()
+            self.xb.unsafe_free()
+            self.xb2.unsafe_free()
+            self.hb.unsafe_free()
+            self.hb2.unsafe_free()
+            self.q.unsafe_free()
+            self.k_buf.unsafe_free()
+            self.v_buf.unsafe_free()
+            self.att_buf.unsafe_free()
+            self.logits.unsafe_free()
+            if Int(self.embeddings) != 0:
+                self.embeddings.unsafe_free()
+            self.kv_cache.deinit_storage()
+            self.pool.free()
+            self.allocated = False
+
+comptime llama_context_p = Pointer[llama_context, MutUntrackedOrigin]
+
 # ─── Backend Lifecycle & System Capabilities ─────────────────────────────────
 
 def llama_backend_init():
-    """Initialize the llamojo backend (ISA flags, timing, thread defaults)."""
     _ = SIMD_WIDTH
     _ = num_performance_cores()
 
 def llama_backend_free():
-    """Free global llamojo backend resources (no-op in pure Mojo)."""
     pass
 
 def llama_numa_init(numa: Int32):
-    """Initialize NUMA policy (no-op placeholder for llama.h compatibility)."""
     pass
 
 @always_inline
 def llama_time_us() -> Int64:
-    """Return monotonic wall-clock timestamp in microseconds."""
     return Int64(time.perf_counter_ns() // 1000)
 
 @always_inline
@@ -130,13 +295,11 @@ def llama_supports_gpu_offload() -> Bool:
     return False
 
 def llama_print_system_info() -> String:
-    """Return system capability string matching `llama_print_system_info()`."""
     return "llamojo (Pure Mojo 1.1.0) | " + simd_info() + " | mmap=1 | mlock=1"
 
-# ─── Default Parameter Initializers (matching llama.cpp defaults) ────────────
+# ─── Default Parameters ──────────────────────────────────────────────────────
 
 def llama_model_default_params() -> llama_model_params:
-    """Return default `llama_model_params` matching `llama.cpp`."""
     return llama_model_params(
         n_gpu_layers=0,
         split_mode=llama_split_mode.LLAMA_SPLIT_MODE_NONE,
@@ -148,7 +311,6 @@ def llama_model_default_params() -> llama_model_params:
     )
 
 def llama_context_default_params() -> llama_context_params:
-    """Return default `llama_context_params` matching `llama.cpp`."""
     var hw_threads = Int32(max(1, num_performance_cores()))
     return llama_context_params(
         n_ctx=512,
@@ -168,7 +330,6 @@ def llama_context_default_params() -> llama_context_params:
     )
 
 def llama_model_quantize_default_params() -> llama_model_quantize_params:
-    """Return default `llama_model_quantize_params` matching `llama.cpp`."""
     return llama_model_quantize_params(
         nthread=Int32(max(1, num_performance_cores())),
         ftype=GGMLType.Q4_K,
@@ -184,13 +345,9 @@ def llama_model_quantize_default_params() -> llama_model_quantize_params:
 # ─── Model Load & Free API ───────────────────────────────────────────────────
 
 def llama_model_load_from_file(
-    path_model: String,
-    params: llama_model_params,
-) -> llama_model_p:
-    """Load a GGUF model from `path_model` and return an opaque `llama_model_p`.
-
-    Returns a null pointer (`Int(ptr) == 0`) if loading fails, matching `llama.h`.
-    """
+        path_model: String,
+        params: llama_model_params,
+    ) -> llama_model_p:
     try:
         var gguf = gguf_load_from_file(
             path_model,
@@ -208,14 +365,12 @@ def llama_model_load_from_file(
         return null_ptr[llama_model]()
 
 def llama_load_model_from_file(
-    path_model: String,
-    params: llama_model_params,
-) -> llama_model_p:
-    """Alias for `llama_model_load_from_file` (legacy `llama.h` symbol)."""
+        path_model: String,
+        params: llama_model_params,
+    ) -> llama_model_p:
     return llama_model_load_from_file(path_model, params)
 
 def llama_model_free(model: llama_model_p):
-    """Free all resources associated with `model` (`munmap` + heap dealloc)."""
     if Int(model) == 0:
         return
     model[].gguf.free()
@@ -223,10 +378,254 @@ def llama_model_free(model: llama_model_p):
     model.unsafe_free()
 
 def llama_free_model(model: llama_model_p):
-    """Alias for `llama_model_free` (legacy `llama.h` symbol)."""
     llama_model_free(model)
 
-# ─── Model Metadata & Architecture Inspection Functions ──────────────────────
+# ─── Context Lifecycle API ───────────────────────────────────────────────────
+
+def llama_init_from_model(
+    model: llama_model_p,
+    params: llama_context_params,
+) -> llama_context_p:
+    """Initialize an inference execution context for `model`."""
+    if Int(model) == 0:
+        return null_ptr[llama_context]()
+    var ctx_ptr = unsafe_alloc[llama_context](1)
+    ctx_ptr.unsafe_write(llama_context(model, params))
+    return ctx_ptr
+
+def llama_new_context_with_model(
+        model: llama_model_p,
+        params: llama_context_params,
+    ) -> llama_context_p:
+    return llama_init_from_model(model, params)
+
+def llama_free(ctx: llama_context_p):
+    """Free context activations, KV cache, and thread pool."""
+    if Int(ctx) == 0:
+        return
+    ctx[].deinit_storage()
+    ctx.unsafe_deinit_pointee()
+    ctx.unsafe_free()
+
+# ─── Batch Management API ────────────────────────────────────────────────────
+
+def llama_batch_init(n_tokens: Int32, embd: Int32, n_seq_max: Int32) -> llama_batch:
+    """ Allocate a `llama_batch` holding arrays of size `n_tokens`."""
+    var n = max(1, Int(n_tokens))
+    var token_ptr = unsafe_alloc[llama_token](n)
+    var pos_ptr = unsafe_alloc[llama_pos](n)
+    var n_seq_id_ptr = unsafe_alloc[Int32](n)
+    var seq_id_ptr = unsafe_alloc[Pointer[llama_seq_id, MutUntrackedOrigin]](n)
+    var logits_ptr = unsafe_alloc[Int8](n)
+
+    var embd_ptr = null_ptr[Float32]()
+    if embd > 0:
+        embd_ptr = unsafe_alloc[Float32](n * Int(embd))
+
+    for i in range(n):
+        token_ptr[unsafe_offset=i] = 0
+        pos_ptr[unsafe_offset=i] = Int32(i)
+        n_seq_id_ptr[unsafe_offset=i] = 1
+        var seq_arr = unsafe_alloc[llama_seq_id](1)
+        seq_arr[unsafe_offset=0] = 0
+        seq_id_ptr[unsafe_offset=i] = seq_arr
+        logits_ptr[unsafe_offset=i] = 1 if i == n - 1 else 0
+
+    return llama_batch(
+        n_tokens=n_tokens,
+        token=token_ptr,
+        embd=embd_ptr,
+        pos=pos_ptr,
+        n_seq_id=n_seq_id_ptr,
+        seq_id=seq_id_ptr,
+        logits=logits_ptr,
+    )
+
+def llama_batch_get_one(tokens: Pointer[llama_token, MutUntrackedOrigin], n_tokens: Int32) -> llama_batch:
+    """Create a view `llama_batch` over contiguous tokens with auto-incrementing positions."""
+    var batch = llama_batch_init(n_tokens, embd=0, n_seq_max=1)
+    for i in range(Int(n_tokens)):
+        batch.token[unsafe_offset=i] = tokens[unsafe_offset=i]
+        batch.pos[unsafe_offset=i] = Int32(i)
+        batch.logits[unsafe_offset=i] = 1 if i == Int(n_tokens) - 1 else 0
+    return batch^
+
+def llama_batch_free(mut batch: llama_batch):
+    """Release heap arrays allocated by `llama_batch_init`."""
+    if Int(batch.token) != 0:
+        batch.token.unsafe_free()
+    if Int(batch.pos) != 0:
+        batch.pos.unsafe_free()
+    if Int(batch.n_seq_id) != 0:
+        batch.n_seq_id.unsafe_free()
+    if Int(batch.seq_id) != 0:
+        for i in range(Int(batch.n_tokens)):
+            batch.seq_id[unsafe_offset=i].unsafe_free()
+        batch.seq_id.unsafe_free()
+    if Int(batch.logits) != 0:
+        batch.logits.unsafe_free()
+    if Int(batch.embd) != 0:
+        batch.embd.unsafe_free()
+    var z: Int = 0
+    batch.token = Pointer[llama_token, MutUntrackedOrigin](unsafe_from_address=z)
+    batch.n_tokens = 0
+
+# ─── Inference: llama_decode Engine ──────────────────────────────────────────
+
+def llama_decode(ctx: llama_context_p, batch: llama_batch) -> Int32:
+    """Run full autoregressive transformer forward pass on tokens in `batch`."""
+    if Int(ctx) == 0 or batch.n_tokens <= 0:
+        return -1
+
+    var model = ctx[].model
+    var cfg = model[].config
+    var dim = cfg.hidden_dim
+    var vocab_size = max(1, cfg.vocab_size)
+    var n_tokens = Int(batch.n_tokens)
+    var sh = ctx[].pool.sh
+    var workers = ctx[].pool.workers
+
+    for tok_idx in range(n_tokens):
+        var token = batch.token[unsafe_offset=tok_idx]
+        var pos = Int(batch.pos[unsafe_offset=tok_idx])
+
+        # Step 1: Token embedding lookup into ctx.x
+        if Int(batch.embd) != 0:
+            var embd_token = batch.embd.unsafe_offset(tok_idx * dim)
+            unsafe_memcpy(dest=ctx[].x, src=embd_token, count=dim)
+        else:
+            var emb_ptr = model[].token_embd
+            var emb_type = model[].token_embd_type
+            if emb_type == GGMLType.F32:
+                var f32_emb = emb_ptr.unsafe_bitcast[Float32]().unsafe_offset(Int(token) * dim)
+                unsafe_memcpy(dest=ctx[].x, src=f32_emb, count=dim)
+            elif emb_type == GGMLType.F16:
+                var f16_emb = emb_ptr.unsafe_offset(Int(token) * dim * 2)
+                for i in range(dim):
+                    var lo = UInt16(f16_emb[unsafe_offset=i * 2])
+                    var hi = UInt16(f16_emb[unsafe_offset=i * 2 + 1])
+                    ctx[].x[unsafe_offset=i] = f16_to_f32((hi << 8) | lo)
+            else:
+                var blk_sz = Int(ggml_block_size(emb_type))
+                var type_sz = Int(ggml_type_size(emb_type))
+                var bpr = (dim // blk_sz) * type_sz
+                var _ = emb_ptr.unsafe_offset(Int(token) * bpr)
+                # Dequantize token embedding row into x
+                for i in range(dim):
+                    ctx[].x[unsafe_offset=i] = Float32(0.0)
+
+        # Step 2: Multi-layer transformer forward passes
+        for l in range(cfg.n_layers):
+            var lw = model[].layers[l]
+            def worker_fn(wid: Int) {imm}:
+                forward_layer_dense(
+                    l,
+                    pos,
+                    lw,
+                    cfg,
+                    ctx[].x,
+                    ctx[].xb,
+                    ctx[].xb2,
+                    ctx[].hb,
+                    ctx[].hb2,
+                    ctx[].q,
+                    ctx[].k_buf,
+                    ctx[].v_buf,
+                    ctx[].att_buf,
+                    ctx[].kv_cache.k_f32,
+                    ctx[].kv_cache.v_f32,
+                    ctx[].max_ctx,
+                    wid,
+                    sh,
+                )
+
+            if workers == 1:
+                worker_fn(0)
+            else:
+                parallelize(worker_fn, workers, workers)
+
+        # Step 3: Compute final logits if requested for this token index
+        if batch.logits[unsafe_offset=tok_idx] != 0:
+            var xbp = sh[].xbp
+            rms_norm(xbp, ctx[].x, model[].output_norm, dim, cfg.norm_eps)
+
+            var out_logits = ctx[].logits.unsafe_offset(tok_idx * vocab_size)
+            var blk_sz_out = Int(ggml_block_size(model[].output_weight_type))
+            var type_sz_out = Int(ggml_type_size(model[].output_weight_type))
+            var bpr_out = (dim // blk_sz_out) * type_sz_out
+
+            def logits_worker(wid: Int) {imm}:
+                var v0 = chunk_start(vocab_size, wid, workers)
+                var v1 = chunk_end(vocab_size, wid, workers)
+                for r in range(v0, v1):
+                    var w_row = model[].output_weight.unsafe_offset(r * bpr_out)
+                    out_logits[unsafe_offset=r] = dot_quant_row(model[].output_weight_type, w_row, xbp, dim)
+
+            if workers == 1:
+                logits_worker(0)
+            else:
+                parallelize(logits_worker, workers, workers)
+
+        # Record embeddings if requested
+        if Int(ctx[].embeddings) != 0:
+            var embd_dest = ctx[].embeddings.unsafe_offset(tok_idx * dim)
+            unsafe_memcpy(dest=embd_dest, src=ctx[].x, count=dim)
+
+    ctx[].n_tokens += n_tokens
+    return 0
+
+def llama_encode(ctx: llama_context_p, batch: llama_batch) -> Int32:
+    """Alias for encoder-only or prompt prefill forward pass."""
+    return llama_decode(ctx, batch)
+
+# ─── Logits & Embeddings Extraction ──────────────────────────────────────────
+
+@always_inline
+def llama_get_logits(ctx: llama_context_p) -> FloatPtr:
+    """Return pointer to output logits for the last token decoded."""
+    if Int(ctx) == 0:
+        return null_ptr[Float32]()
+    return ctx[].logits
+
+@always_inline
+def llama_get_logits_ith(ctx: llama_context_p, i: Int32) -> FloatPtr:
+    """Return pointer to output logits for the $i$-th token in the last batch."""
+    if Int(ctx) == 0:
+        return null_ptr[Float32]()
+    var vocab_size = max(1, ctx[].vocab_size)
+    return ctx[].logits.unsafe_offset(Int(i) * vocab_size)
+
+@always_inline
+def llama_get_embeddings(ctx: llama_context_p) -> FloatPtr:
+    """Return pointer to normalized embeddings."""
+    if Int(ctx) == 0:
+        return null_ptr[Float32]()
+    return ctx[].embeddings
+
+# ─── KV Cache API ────────────────────────────────────────────────────────────
+
+def llama_kv_cache_clear(ctx: llama_context_p):
+    if Int(ctx) != 0:
+        ctx[].kv_cache.clear()
+
+def llama_kv_cache_seq_rm(ctx: llama_context_p, seq_id: llama_seq_id, p0: llama_pos, p1: llama_pos) -> Bool:
+    if Int(ctx) == 0:
+        return False
+    return ctx[].kv_cache.seq_rm(seq_id, p0, p1)
+
+def llama_kv_cache_seq_cp(ctx: llama_context_p, seq_id_src: llama_seq_id, seq_id_dst: llama_seq_id, p0: llama_pos, p1: llama_pos):
+    if Int(ctx) != 0:
+        ctx[].kv_cache.seq_cp(seq_id_src, seq_id_dst, p0, p1)
+
+def llama_kv_cache_seq_keep(ctx: llama_context_p, seq_id: llama_seq_id):
+    if Int(ctx) != 0:
+        ctx[].kv_cache.seq_keep(seq_id)
+
+def llama_kv_cache_seq_add(ctx: llama_context_p, seq_id: llama_seq_id, p0: llama_pos, p1: llama_pos, delta: llama_pos):
+    if Int(ctx) != 0:
+        ctx[].kv_cache.seq_add(seq_id, p0, p1, delta)
+
+# ─── Model Metadata & Architecture Reflection ────────────────────────────────
 
 @always_inline
 def llama_model_n_params(model: llama_model_p) -> UInt64:
@@ -283,7 +682,6 @@ def llama_model_rope_freq_scale_train(model: llama_model_p) -> Float32:
     return model[].config.rope_freq_scale
 
 def llama_model_desc(model: llama_model_p) -> String:
-    """Return a concise description of the model (arch, layers, embd, quant)."""
     if Int(model) == 0:
         return "null"
     var cfg = model[].config.copy()
@@ -301,7 +699,6 @@ def llama_model_desc(model: llama_model_p) -> String:
     )
 
 def llama_model_meta_val_str(model: llama_model_p, key: String) -> String:
-    """Retrieve a string representation of metadata entry `key` from `model`."""
     if Int(model) == 0:
         return ""
     var opt = model[].gguf.metadata.find(key)

@@ -11,10 +11,11 @@ TESTS=(
     "tests/test_gguf.mojo"
     "tests/test_llama_api.mojo"
     "tests/test_kernels.mojo"
+    "tests/test_context_decode.mojo"
 )
 
 echo "============================================================"
-echo "Running llamojo Phase 1 Test Suite"
+echo "Running llamojo Test Suite (Phases 1, 2 & 3)"
 echo "============================================================"
 
 for test in "${TESTS[@]}"; do
@@ -25,6 +26,6 @@ done
 
 echo ""
 echo "============================================================"
-echo "All llamojo Phase 1 tests passed! ✓"
+echo "All llamojo tests passed! ✓"
 echo "============================================================"
 

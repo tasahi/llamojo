@@ -318,8 +318,8 @@ struct llama_token_data_array(ImplicitlyCopyable, Copyable, Movable):
 # ─── Dynamic Runtime Model Configuration ─────────────────────────────────────
 
 @fieldwise_init
-struct ModelConfig(Copyable, Movable):
-    """Runtime model configuration populated from GGUF metadata."""
+struct ModelConfig(ImplicitlyCopyable, Copyable, Movable):
+    """ Runtime model configuration populated from GGUF metadata."""
     var arch: String             # e.g. "llama", "qwen2", "gemma2", "mamba"
     var name: String             # general.name
     var hidden_dim: Int          # {arch}.embedding_length
