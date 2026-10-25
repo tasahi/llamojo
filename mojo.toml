@@ -1,0 +1,16 @@
+[project]
+name = "llamojo"
+version = "0.1.0"
+description = "Pure Mojo llama.cpp compatible library (libllama) with zero Python/C++ compute dependencies"
+authors = ["llamojo Contributors"]
+
+[dependencies]
+max = ">=26.6.0"
+
+[build]
+include-dirs = [
+    "src",
+    "vendor/llama2.mojo",
+    "vendor/MojoLlama/src",
+]
+
