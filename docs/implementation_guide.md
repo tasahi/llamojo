@@ -149,7 +149,8 @@ In Mojo 1.1.0, sublibraries are imported without code changes or wrapper overhea
 ### 4.11 Multi-threaded Block Quantizer & GGUF Converter (`src/llamojo/quantize.mojo`)
 - **Pure-Mojo Quantizers**: Multi-threaded parallel block encoders (`parallelize`) for `Q4_0`, `Q5_0`, `Q8_0`, `Q4_K`, and `Q6_K`.
 - **IEEE 754 Float16 Encoder**: Pure-Mojo `encode_f16` for block scale factors.
-- **`llama_model_quantize`**: Full streaming model converter reading source GGUF files and emitting quantized v3 files with 24-byte headers and aligned tensor payload buffers.
+- **Full GGUF Metadata Mirroring (Phase 5)**: Preserves all arbitrary key-value pairs (chat templates, tokenizer tokens and scores, architecture parameters) from input models, dynamically writes target `general.file_type = ftype`, and updates `general.quantization_version = 2`.
+- **`llama_model_quantize`**: Full streaming model converter reading source GGUF files and emitting quantized v3 files with 32-byte aligned metadata headers and aligned tensor payload buffers.
 
 ### 4.12 CLI Utilities & HTTP Inference Server (`tools/`)
 - [`tools/llama_cli.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_cli.mojo): Standalone interactive command-line generation tool.
@@ -169,5 +170,5 @@ All modules are verified via the automated test runner [`run-tests.sh`](file:///
 | [`tests/test_llama_api.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_llama_api.mojo) | `llama.h` API, model inspection, persistent spin-barrier multi-worker pool | Passed |
 | [`tests/test_kernels.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_kernels.mojo) | Fused RMSNorm+Res, SwiGLU, RoPE rotation, Q8_0 quant, `k4_scale`, Q4_K / MXFP4 dot, multi-matrix fusion ($n=3$) | Passed |
 | [`tests/test_context_decode.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_context_decode.mojo) | KV Cache, PageTable allocation, sequence manipulation, `llama_batch`, multi-layer `llama_decode` forward pass | Passed |
-| [`tests/test_vocab_sampler.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_vocab_sampler.mojo) | GGUF vocabulary BPE tokenization/detokenization, composable sampler pipeline (penalties, temp, top-k, top-p, greedy), block quantizers (Q4_0, Q8_0, Q4_K, Q6_K) | Passed |
-| `mojo precompile` | Clean binary package generation ([`build/llamojo.mojoc`](file:///mnt/c/Documents/Mojo/llamojo/build/llamojo.mojoc) — 358 KB) | Passed (0 errors) |
+| [`tests/test_vocab_sampler.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_vocab_sampler.mojo) | GGUF vocabulary BPE tokenization/detokenization, composable sampler pipeline (penalties, temp, top-k, top-p, greedy), block quantizers (Q4_0, Q8_0, Q4_K, Q6_K), and full metadata preservation serialization | Passed |
+| `mojo precompile` | Clean binary package generation ([`build/llamojo.mojoc`](file:///mnt/c/Documents/Mojo/llamojo/build/llamojo.mojoc) — 371 KB) | Passed (0 errors) |

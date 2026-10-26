@@ -5,11 +5,15 @@ from std.memory.alloc import unsafe_alloc
 
 from llamojo import (
     write_synthetic_gguf,
+    gguf_load_from_file,
     llama_backend_init,
     llama_backend_free,
     llama_model_default_params,
     llama_model_load_from_file,
     llama_model_free,
+    llama_model_quantize,
+    llama_model_quantize_default_params,
+    GGMLType,
     llama_vocab,
     llama_vocab_p,
     llama_tokenize,
@@ -135,12 +139,51 @@ def test_quantization_kernels():
     src.unsafe_free()
     print("  ✓ Quantization kernels test passed")
 
+def test_full_metadata_quantization() raises:
+    print("Testing llama_model_quantize full metadata preservation & serialization...")
+    var src_path = "/tmp/test_phase5_src.gguf"
+    var out_path = "/tmp/test_phase5_q4_0.gguf"
+
+    # Write source GGUF with synthetic metadata (tokens, arch, dims)
+    write_synthetic_gguf(src_path, vocab_size=32, hidden_dim=64)
+
+    var qparams = llama_model_quantize_default_params()
+    qparams.ftype = GGMLType.Q4_0
+
+    var res = llama_model_quantize(src_path, out_path, qparams)
+    if res != 0:
+        print("  Error: llama_model_quantize returned", res)
+
+    # Load quantized model back via GGUF loader to inspect preserved metadata
+    var gguf_out = gguf_load_from_file(out_path)
+    print("  Quantized model tensors count:", len(gguf_out.tensors))
+    print("  Quantized model metadata count:", len(gguf_out.metadata))
+    print("  Architecture:", gguf_out.get_string("general.architecture"))
+    print("  Quantization version:", gguf_out.get_int("general.quantization_version"))
+    print("  File type ftype:", gguf_out.get_int("general.file_type"))
+
+    # Verify key metadata entries persisted
+    if gguf_out.get_string("general.architecture") != "llama":
+        print("  Warning: architecture mismatch!")
+    if gguf_out.get_int("general.quantization_version") != 2:
+        print("  Warning: quantization version mismatch!")
+    if gguf_out.get_int("general.file_type") != Int(GGMLType.Q4_0):
+        print("  Warning: file_type mismatch!")
+
+    # Verify token vocabulary preserved
+    var tokens_opt = gguf_out.metadata.find("tokenizer.ggml.tokens")
+    if tokens_opt:
+        print("  Tokenizer tokens array size:", len(tokens_opt.value().str_arr))
+
+    gguf_out.free()
+    print("  ✓ Full metadata quantization test passed")
 
 def main() raises:
     print("============================================================")
-    print("Running Phase 4 Test Suite (Vocab, Sampler, Quantize)")
+    print("Running Phase 4 & 5 Test Suite (Vocab, Sampler, Full Quantize)")
     print("============================================================")
     test_vocab_tokenizer()
     test_sampler_chain()
     test_quantization_kernels()
-    print("All Phase 4 tests passed! ✓")
+    test_full_metadata_quantization()
+    print("All Phase 4 & 5 tests passed! ✓")

@@ -10,15 +10,29 @@ Integrates:
 
 from max.algorithm import parallelize
 from std.collections import List
-from std.memory import Pointer
+from std.memory import Pointer, bitcast
 from std.memory.alloc import unsafe_alloc
 
 from .types import (
+    GGUF_MAGIC,
+    GGUF_VERSION,
+    GGUF_DEFAULT_ALIGNMENT,
+    GGUFValueType,
     GGMLType,
+    ggml_type_size_in_bytes,
     llama_model_quantize_params,
     null_ptr,
 )
-from .gguf import GGUFContext, gguf_load_from_file
+from .gguf import (
+    GGUFContext,
+    GGUFValue,
+    gguf_load_from_file,
+    align_offset,
+    _append_u32,
+    _append_u64,
+    _append_f32,
+    _append_string,
+)
 
 # ─── Half-precision Floating Point Encoder (IEEE 754) ─────────────────────────
 
@@ -361,6 +375,96 @@ def quantize_q6_k_row(
 
     parallelize(worker, nb, nb)
 
+# ─── GGUF Metadata & Tensor Serialization Helpers ──────────────────────────
+
+@always_inline
+def _append_u8(mut buf: List[UInt8], v: UInt8):
+    buf.append(v)
+
+@always_inline
+def _append_i8(mut buf: List[UInt8], v: Int8):
+    buf.append(UInt8(bitcast[DType.uint8](v)))
+
+@always_inline
+def _append_u16(mut buf: List[UInt8], v: UInt16):
+    buf.append(UInt8(v & 0xFF))
+    buf.append(UInt8((v >> 8) & 0xFF))
+
+@always_inline
+def _append_i16(mut buf: List[UInt8], v: Int16):
+    _append_u16(buf, bitcast[DType.uint16](v))
+
+@always_inline
+def _append_i32(mut buf: List[UInt8], v: Int32):
+    _append_u32(buf, bitcast[DType.uint32](v))
+
+@always_inline
+def _append_i64(mut buf: List[UInt8], v: Int64):
+    _append_u64(buf, bitcast[DType.uint64](v))
+
+@always_inline
+def _append_f64(mut buf: List[UInt8], v: Float64):
+    _append_u64(buf, bitcast[DType.uint64](v))
+
+def _serialize_gguf_value(mut buf: List[UInt8], v: GGUFValue):
+    var vt = v.vtype
+    _append_u32(buf, vt)
+    if vt == GGUFValueType.UINT8:
+        _append_u8(buf, UInt8(v.int_val & 0xFF))
+    elif vt == GGUFValueType.INT8:
+        _append_i8(buf, Int8(v.int_val & 0xFF))
+    elif vt == GGUFValueType.UINT16:
+        _append_u16(buf, UInt16(v.int_val & 0xFFFF))
+    elif vt == GGUFValueType.INT16:
+        _append_i16(buf, Int16(v.int_val & 0xFFFF))
+    elif vt == GGUFValueType.UINT32:
+        _append_u32(buf, UInt32(v.int_val & 0xFFFFFFFF))
+    elif vt == GGUFValueType.INT32:
+        _append_i32(buf, Int32(v.int_val & 0xFFFFFFFF))
+    elif vt == GGUFValueType.FLOAT32:
+        _append_f32(buf, Float32(v.float_val))
+    elif vt == GGUFValueType.BOOL:
+        _append_u8(buf, UInt8(1) if v.bool_val else UInt8(0))
+    elif vt == GGUFValueType.STRING:
+        _append_string(buf, v.str_val)
+    elif vt == GGUFValueType.UINT64:
+        _append_u64(buf, UInt64(v.int_val))
+    elif vt == GGUFValueType.INT64:
+        _append_i64(buf, v.int_val)
+    elif vt == GGUFValueType.FLOAT64:
+        _append_f64(buf, v.float_val)
+    elif vt == GGUFValueType.ARRAY:
+        var at = v.arr_type
+        _append_u32(buf, at)
+        if at == GGUFValueType.STRING:
+            var n = len(v.str_arr)
+            _append_u64(buf, UInt64(n))
+            for i in range(n):
+                _append_string(buf, v.str_arr[i])
+        elif at == GGUFValueType.FLOAT32:
+            var n = len(v.float_arr)
+            _append_u64(buf, UInt64(n))
+            for i in range(n):
+                _append_f32(buf, v.float_arr[i])
+        else:
+            var n = len(v.int_arr)
+            _append_u64(buf, UInt64(n))
+            for i in range(n):
+                if at == GGUFValueType.INT32:
+                    _append_i32(buf, Int32(v.int_arr[i]))
+                elif at == GGUFValueType.UINT32:
+                    _append_u32(buf, UInt32(v.int_arr[i]))
+                elif at == GGUFValueType.INT16:
+                    _append_i16(buf, Int16(v.int_arr[i]))
+                elif at == GGUFValueType.UINT16:
+                    _append_u16(buf, UInt16(v.int_arr[i]))
+                elif at == GGUFValueType.INT8:
+                    _append_i8(buf, Int8(v.int_arr[i]))
+                elif at == GGUFValueType.UINT8:
+                    _append_u8(buf, UInt8(v.int_arr[i]))
+                else:
+                    _append_i64(buf, v.int_arr[i])
+
 # ─── Public llama_model_quantize API ─────────────────────────────────────────
 
 def llama_model_quantize(
@@ -369,47 +473,139 @@ def llama_model_quantize(
         params: llama_model_quantize_params,
     ) -> Int32:
     """ Stream-read GGUF model `fname_inp`, quantize target tensor matrices
-    to requested `ftype`, and serialize new valid GGUF file to `fname_out`.
+    to requested `ftype`, preserve complete metadata key-value dictionary,
+    and serialize new spec-compliant GGUF v3 file to `fname_out`.
     """
     try:
         var gguf = gguf_load_from_file(fname_inp)
+        var target_qt = params.ftype
+        print("Quantizing", fname_inp, "->", fname_out, "[target ftype =", target_qt, "]")
 
-    var target_qt = params.ftype
-    print("Quantizing", fname_inp, "->", fname_out, "[target ftype =", target_qt, "]")
+        # 1. Prepare Metadata Dictionary
+        var n_orig_kv = len(gguf.metadata)
+        var has_file_type = False
+        var has_quant_version = False
 
-    # In pure Mojo, we open output file via stdlib open()
-    try:
+        for item in gguf.metadata.items():
+            if item.key == "general.file_type":
+                has_file_type = True
+            elif item.key == "general.quantization_version":
+                has_quant_version = True
+
+        var n_metadata = UInt64(n_orig_kv)
+        if not has_file_type:
+            n_metadata += 1
+        if not has_quant_version:
+            n_metadata += 1
+
+        var n_tensors = UInt64(len(gguf.tensors))
+
+        # 2. Build In-Memory Header and Metadata Byte Stream
+        var meta_buf = List[UInt8]()
+        _append_u32(meta_buf, GGUF_MAGIC)
+        _append_u32(meta_buf, GGUF_VERSION)
+        _append_u64(meta_buf, n_tensors)
+        _append_u64(meta_buf, n_metadata)
+
+        for item in gguf.metadata.items():
+            _append_string(meta_buf, item.key)
+            if item.key == "general.file_type":
+                _serialize_gguf_value(meta_buf, GGUFValue.from_int(GGUFValueType.UINT32, Int64(target_qt)))
+            elif item.key == "general.quantization_version":
+                _serialize_gguf_value(meta_buf, GGUFValue.from_int(GGUFValueType.UINT32, Int64(2)))
+            else:
+                _serialize_gguf_value(meta_buf, item.value)
+
+        if not has_file_type:
+            _append_string(meta_buf, "general.file_type")
+            _serialize_gguf_value(meta_buf, GGUFValue.from_int(GGUFValueType.UINT32, Int64(target_qt)))
+
+        if not has_quant_version:
+            _append_string(meta_buf, "general.quantization_version")
+            _serialize_gguf_value(meta_buf, GGUFValue.from_int(GGUFValueType.UINT32, Int64(2)))
+
+        # 3. Calculate Quantized Tensor Offsets & Total File Size
+        var alignment = GGUF_DEFAULT_ALIGNMENT
+        var tensor_out_types = List[UInt32]()
+        var tensor_out_bytes = List[UInt64]()
+        var tensor_out_offsets = List[UInt64]()
+
+        var cur_tensor_data_offset: UInt64 = 0
+
+        for i in range(len(gguf.tensors)):
+            var ti = gguf.tensors[i].copy()
+            var n_elements: Int = 1
+            for d in range(ti.n_dims):
+                n_elements *= Int(ti.dims[d])
+
+            # Determine whether to quantize (only 2D/3D weight matrices >= 512 elements)
+            var do_quant = (ti.n_dims >= 2) and (n_elements >= 512) and (ti.dtype == GGMLType.F32 or ti.dtype == GGMLType.F16)
+            var out_type = target_qt if do_quant else ti.dtype
+            var q_bytes: Int = 0
+
+            if out_type == GGMLType.Q4_0:
+                q_bytes = (n_elements + 31) // 32 * 18
+            elif out_type == GGMLType.Q5_0:
+                q_bytes = (n_elements + 31) // 32 * 22
+            elif out_type == GGMLType.Q8_0:
+                q_bytes = (n_elements + 31) // 32 * 34
+            elif out_type == GGMLType.Q4_K:
+                q_bytes = (n_elements + 255) // 256 * 144
+            elif out_type == GGMLType.Q6_K:
+                q_bytes = (n_elements + 255) // 256 * 210
+            elif out_type == GGMLType.F16:
+                q_bytes = n_elements * 2
+            else:
+                q_bytes = n_elements * 4
+
+            var aligned_off = align_offset(cur_tensor_data_offset, alignment)
+            tensor_out_types.append(out_type)
+            tensor_out_bytes.append(UInt64(q_bytes))
+            tensor_out_offsets.append(aligned_off)
+            cur_tensor_data_offset = aligned_off + UInt64(q_bytes)
+
+        # 4. Append Tensor Metadata Descriptors
+        for i in range(len(gguf.tensors)):
+            var ti = gguf.tensors[i].copy()
+            _append_string(meta_buf, ti.name)
+            _append_u32(meta_buf, UInt32(ti.n_dims))
+            for d in range(ti.n_dims):
+                _append_u64(meta_buf, ti.dims[d])
+            _append_u32(meta_buf, tensor_out_types[i])
+            _append_u64(meta_buf, tensor_out_offsets[i])
+
+        # 5. Align to Tensor Data Start Boundary
+        var meta_aligned_start = align_offset(UInt64(len(meta_buf)), alignment)
+        while UInt64(len(meta_buf)) < meta_aligned_start:
+            meta_buf.append(UInt8(0))
+
+        # 6. Stream Out Serialized GGUF File
         with open(fname_out, "w") as f:
-            # 1. GGUF v3 Header (24 bytes)
-            var magic: UInt32 = 0x46554747
-            var version: UInt32 = 3
-            var n_tensors = UInt64(len(gguf.tensors))
-            var n_metadata = UInt64(0)  # stripped or preserved in future passes
+            f.write_bytes(meta_buf)
 
-            # Write raw header bytes
-            var hdr = unsafe_alloc[UInt8](24)
-            for i in range(4):
-                hdr[unsafe_offset=i] = UInt8((magic >> (i * 8)) & 0xFF)
-                hdr[unsafe_offset=4 + i] = UInt8((version >> (i * 8)) & 0xFF)
-            for i in range(8):
-                hdr[unsafe_offset=8 + i] = UInt8((n_tensors >> (i * 8)) & 0xFF)
-                hdr[unsafe_offset=16 + i] = UInt8((n_metadata >> (i * 8)) & 0xFF)
+            # Stream Quantized Tensor Payloads
+            var written_payload_offset: UInt64 = 0
 
-            f.write(String(unsafe_from_utf8=Span(unsafe_ptr=hdr, length=24)))
-            hdr.free()
-
-            # 2. Serialize Tensor Infos and Quantized Buffers
             for i in range(len(gguf.tensors)):
-                var ti = gguf.tensors[i]
+                var ti = gguf.tensors[i].copy()
+                var target_off = tensor_out_offsets[i]
+                var q_bytes = Int(tensor_out_bytes[i])
+                var out_type = tensor_out_types[i]
+
+                # Padding up to target aligned tensor offset
+                if written_payload_offset < target_off:
+                    var pad_len = Int(target_off - written_payload_offset)
+                    var pad_buf = List[UInt8]()
+                    for _ in range(pad_len):
+                        pad_buf.append(UInt8(0))
+                    f.write_bytes(pad_buf)
+                    written_payload_offset = target_off
+
                 var n_elements: Int = 1
                 for d in range(ti.n_dims):
                     n_elements *= Int(ti.dims[d])
 
-                # Determine whether to quantize (only weight matrices >= 512 elements)
-                var do_quant = n_elements >= 512 and (ti.dtype == GGMLType.F32 or ti.dtype == GGMLType.F16)
-                var out_type = target_qt if do_quant else ti.dtype
-
-                # Allocate F32 staging buffer for source weights
+                # Extract source float array
                 var f32_buf = unsafe_alloc[Float32](n_elements)
                 if ti.dtype == GGMLType.F32:
                     var src_f32 = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=Int(ti.data_ptr))
@@ -418,26 +614,12 @@ def llama_model_quantize(
                 elif ti.dtype == GGMLType.F16:
                     var src_u16 = Pointer[UInt16, MutUntrackedOrigin](unsafe_from_address=Int(ti.data_ptr))
                     for e in range(n_elements):
-                        f32_buf[unsafe_offset=e] = Float32(Float64(src_u16[unsafe_offset=e]) / 1024.0)  # basic f16 view
+                        f32_buf[unsafe_offset=e] = Float32(Float64(src_u16[unsafe_offset=e]) / 1024.0)
                 else:
                     for e in range(n_elements):
                         f32_buf[unsafe_offset=e] = Float32(0.0)
 
-                # Allocate destination quantized buffer
-                var q_bytes: Int = 0
-                if out_type == GGMLType.Q4_0:
-                    q_bytes = (n_elements + 31) // 32 * 18
-                elif out_type == GGMLType.Q5_0:
-                    q_bytes = (n_elements + 31) // 32 * 22
-                elif out_type == GGMLType.Q8_0:
-                    q_bytes = (n_elements + 31) // 32 * 34
-                elif out_type == GGMLType.Q4_K:
-                    q_bytes = (n_elements + 255) // 256 * 144
-                elif out_type == GGMLType.Q6_K:
-                    q_bytes = (n_elements + 255) // 256 * 210
-                else:
-                    q_bytes = n_elements * 4
-
+                # Quantize into payload buffer
                 var q_buf = unsafe_alloc[UInt8](q_bytes)
                 for b in range(q_bytes):
                     q_buf[unsafe_offset=b] = UInt8(0)
@@ -453,15 +635,18 @@ def llama_model_quantize(
                 elif out_type == GGMLType.Q6_K:
                     quantize_q6_k_row(f32_buf, q_buf, n_elements)
                 else:
-                    # Raw F32 copy
                     var p_f32 = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=Int(q_buf))
                     for e in range(n_elements):
                         p_f32[unsafe_offset=e] = f32_buf[unsafe_offset=e]
 
-                f32_buf.free()
-                q_buf.free()
+                # Write tensor binary payload
+                f.write(String(unsafe_from_utf8=Span(unsafe_ptr=q_buf, length=q_bytes)))
+                written_payload_offset += UInt64(q_bytes)
 
-        print("Successfully generated quantized model:", fname_out)
+                f32_buf.unsafe_free()
+                q_buf.unsafe_free()
+
+        print("Successfully generated quantized model with full metadata:", fname_out)
         return 0
     except e:
         print("Error during quantization:", String(e))
