@@ -44,6 +44,7 @@ from .kernels_norm_rope import (
     fused_silu_mul,
     silu,
     rope_head,
+    apply_rope_norm,
     apply_rope_neox,
 )
 from .kernels_quant import (
@@ -62,6 +63,7 @@ from .kernels_quant import (
     dot_q6_k_row,
     dot_mxfp4_row,
     dot_quant_row,
+    dequantize_row,
     matmul_quant_fused,
 )
 from .kernels_attn import (
@@ -80,5 +82,14 @@ from .moe import (
     SelectedExpert,
     route_experts,
     forward_moe_ffn,
+)
+from .micro_arch import (
+    gemv_quant_tiled,
+    dot_q8_0_vnni,
+    dot_bf16_vec,
+    flash_attn_cpu,
+    numa_is_available,
+    numa_pin_thread,
+    numa_node_count,
 )
 

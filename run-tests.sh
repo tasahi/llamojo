@@ -16,6 +16,7 @@ TESTS=(
     "tests/test_lora.mojo"
     "tests/test_grammar.mojo"
     "tests/test_moe.mojo"
+    "tests/test_micro_arch.mojo"
 )
 
 echo "============================================================"

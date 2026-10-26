@@ -28,6 +28,7 @@ from .kernels_norm_rope import (
     fused_rms_norm_residual,
     rms_norm,
     fused_silu_mul,
+    apply_rope_norm,
     apply_rope_neox,
 )
 from .kernels_quant import (
@@ -60,6 +61,13 @@ struct LayerWeights(ImplicitlyCopyable, Copyable, Movable):
     var exp_ups_ptr: Pointer[BytePtr, MutUntrackedOrigin]
     var exp_downs_ptr: Pointer[BytePtr, MutUntrackedOrigin]
     var dtype: UInt32
+    var dtype_q: UInt32
+    var dtype_k: UInt32
+    var dtype_v: UInt32
+    var dtype_o: UInt32
+    var dtype_gate: UInt32
+    var dtype_up: UInt32
+    var dtype_down: UInt32
 
     def __init__(out self):
         var z: Int = 0
@@ -80,6 +88,13 @@ struct LayerWeights(ImplicitlyCopyable, Copyable, Movable):
         self.exp_ups_ptr = Pointer[BytePtr, MutUntrackedOrigin](unsafe_from_address=z)
         self.exp_downs_ptr = Pointer[BytePtr, MutUntrackedOrigin](unsafe_from_address=z)
         self.dtype = GGMLType.F32
+        self.dtype_q = GGMLType.F32
+        self.dtype_k = GGMLType.F32
+        self.dtype_v = GGMLType.F32
+        self.dtype_o = GGMLType.F32
+        self.dtype_gate = GGMLType.F32
+        self.dtype_up = GGMLType.F32
+        self.dtype_down = GGMLType.F32
 
 # ─── Multi-Architecture Transformer Forward Worker ────────────────────────────
 
@@ -135,18 +150,27 @@ def forward_layer_dense(
     var v_ptr = v_buf
 
     if Int(lw.wq) != 0:
-        if kv_dim == dim:
+        if kv_dim == dim and lw.dtype_q == lw.dtype_k and lw.dtype_q == lw.dtype_v:
             var c_qkv = StaticTuple[FloatPtr, 3](q_ptr, k_ptr, v_ptr)
             var w_qkv = StaticTuple[BytePtr, 3](lw.wq, lw.wk, lw.wv)
-            matmul_quant_fused[3](lw.dtype, c_qkv, xbp, w_qkv, d0, d1, dim)
+            matmul_quant_fused[3](lw.dtype_q, c_qkv, xbp, w_qkv, d0, d1, dim)
         else:
             var c_q = StaticTuple[FloatPtr, 1](q_ptr)
             var w_q = StaticTuple[BytePtr, 1](lw.wq)
-            matmul_quant_fused[1](lw.dtype, c_q, xbp, w_q, d0, d1, dim)
+            matmul_quant_fused[1](lw.dtype_q, c_q, xbp, w_q, d0, d1, dim)
 
-            var c_kv = StaticTuple[FloatPtr, 2](k_ptr, v_ptr)
-            var w_kv = StaticTuple[BytePtr, 2](lw.wk, lw.wv)
-            matmul_quant_fused[2](lw.dtype, c_kv, xbp, w_kv, kv0, kv1, dim)
+            if lw.dtype_k == lw.dtype_v:
+                var c_kv = StaticTuple[FloatPtr, 2](k_ptr, v_ptr)
+                var w_kv = StaticTuple[BytePtr, 2](lw.wk, lw.wv)
+                matmul_quant_fused[2](lw.dtype_k, c_kv, xbp, w_kv, kv0, kv1, dim)
+            else:
+                var c_k = StaticTuple[FloatPtr, 1](k_ptr)
+                var w_k = StaticTuple[BytePtr, 1](lw.wk)
+                matmul_quant_fused[1](lw.dtype_k, c_k, xbp, w_k, kv0, kv1, dim)
+
+                var c_v = StaticTuple[FloatPtr, 1](v_ptr)
+                var w_v = StaticTuple[BytePtr, 1](lw.wv)
+                matmul_quant_fused[1](lw.dtype_v, c_v, xbp, w_v, kv0, kv1, dim)
     else:
         # Pass-through for partial synthetic models
         if wid == 0:
@@ -160,7 +184,10 @@ def forward_layer_dense(
 
     # 3. RoPE: apply in-place to worker's heads (worker 0 applies for all if 1 worker)
     if wid == 0:
-        apply_rope_neox(q, k_buf, n_heads, n_kv_heads, head_dim, pos, cfg.rope_theta, cfg.rope_freq_scale)
+        if cfg.rope_type == 0:
+            apply_rope_norm(q, k_buf, n_heads, n_kv_heads, head_dim, pos, cfg.rope_theta, cfg.rope_freq_scale)
+        else:
+            apply_rope_neox(q, k_buf, n_heads, n_kv_heads, head_dim, pos, cfg.rope_theta, cfg.rope_freq_scale)
     llama_barrier(sh)
 
     # 4. Write new K, V into cache at current slot `pos`
@@ -192,12 +219,12 @@ def forward_layer_dense(
 
     # 6. Output Projection + Residual Addition
     if Int(lw.wo) != 0:
-        var blk_sz_wo = Int(ggml_block_size(lw.dtype))
-        var type_sz_wo = Int(ggml_type_size(lw.dtype))
+        var blk_sz_wo = Int(ggml_block_size(lw.dtype_o))
+        var type_sz_wo = Int(ggml_type_size(lw.dtype_o))
         var bpr_wo = (dim // blk_sz_wo) * type_sz_wo
         for r in range(d0, d1):
             var w_row = lw.wo.unsafe_offset(r * bpr_wo)
-            var res_wo = dot_quant_row(lw.dtype, w_row, xb, dim)
+            var res_wo = dot_quant_row(lw.dtype_o, w_row, xb, dim)
             x[unsafe_offset=r] += res_wo
     else:
         for r in range(d0, d1):
@@ -218,12 +245,21 @@ def forward_layer_dense(
             var wg = lw.exp_gates_ptr[unsafe_offset=e] if Int(lw.exp_gates_ptr) != 0 else lw.w_gate
             var wu = lw.exp_ups_ptr[unsafe_offset=e] if Int(lw.exp_ups_ptr) != 0 else lw.w_up
             var wd = lw.exp_downs_ptr[unsafe_offset=e] if Int(lw.exp_downs_ptr) != 0 else lw.w_down
-            moe.experts.append(MoEExpertWeights(wg, wu, wd, lw.dtype))
+            moe.experts.append(MoEExpertWeights(wg, wu, wd, lw.dtype_gate))
         forward_moe_ffn(x, xbp, hb, hb2, moe, dim, hidden_dim, wid, sh)
     elif Int(lw.w_gate) != 0 and Int(lw.w_up) != 0:
-        var c_gate_up = StaticTuple[FloatPtr, 2](hb, hb2)
-        var w_gate_up = StaticTuple[BytePtr, 2](lw.w_gate, lw.w_up)
-        matmul_quant_fused[2](lw.dtype, c_gate_up, xbp, w_gate_up, f0, f1, dim)
+        if lw.dtype_gate == lw.dtype_up:
+            var c_gate_up = StaticTuple[FloatPtr, 2](hb, hb2)
+            var w_gate_up = StaticTuple[BytePtr, 2](lw.w_gate, lw.w_up)
+            matmul_quant_fused[2](lw.dtype_gate, c_gate_up, xbp, w_gate_up, f0, f1, dim)
+        else:
+            var c_g = StaticTuple[FloatPtr, 1](hb)
+            var w_g = StaticTuple[BytePtr, 1](lw.w_gate)
+            matmul_quant_fused[1](lw.dtype_gate, c_g, xbp, w_g, f0, f1, dim)
+
+            var c_u = StaticTuple[FloatPtr, 1](hb2)
+            var w_u = StaticTuple[BytePtr, 1](lw.w_up)
+            matmul_quant_fused[1](lw.dtype_up, c_u, xbp, w_u, f0, f1, dim)
 
         # Apply SiLU to worker's slice of hidden dimension: hb = silu(hb) * hb2
         for i in range(f0, f1):
@@ -232,11 +268,11 @@ def forward_layer_dense(
 
         # 9. Down Projection + Residual Addition
         if Int(lw.w_down) != 0:
-            var blk_sz_down = Int(ggml_block_size(lw.dtype))
-            var type_sz_down = Int(ggml_type_size(lw.dtype))
+            var blk_sz_down = Int(ggml_block_size(lw.dtype_down))
+            var type_sz_down = Int(ggml_type_size(lw.dtype_down))
             var bpr_down = (hidden_dim // blk_sz_down) * type_sz_down
             for r in range(d0, d1):
                 var w_row = lw.w_down.unsafe_offset(r * bpr_down)
-                var res_down = dot_quant_row(lw.dtype, w_row, hb, hidden_dim)
+                var res_down = dot_quant_row(lw.dtype_down, w_row, hb, hidden_dim)
                 x[unsafe_offset=r] += res_down
         llama_barrier(sh)

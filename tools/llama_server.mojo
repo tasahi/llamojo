@@ -4,7 +4,7 @@ Usage:
     mojo run -I src -I vendor/llama2.mojo tools/llama_server.mojo [model.gguf] [port]
 """
 
-from std.env import argv
+from std.sys import argv
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 

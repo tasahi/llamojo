@@ -67,7 +67,7 @@ In Mojo 1.1.0, sublibraries are imported without code changes or wrapper overhea
    Configured in `mojo.toml` and CLI commands:
    `-I src -I vendor/llama2.mojo -I vendor/MojoLlama/src`.
 3. **Selective Reuse & Upgrades**:
-   - `llama2.mojo` is already on Mojo 1.1.0 and is imported directly in [`src/llamojo/backend/threadpool.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/threadpool.mojo).
+   - `llama2.mojo` is already on Mojo 1.1.0 and is imported directly in [`src/llamojo/backend/threadpool.mojo`](../src/llamojo/backend/threadpool.mojo).
    - `MojoLlama`'s pure Mojo algorithms (GGUF parsing, ISA detection, K-quant bit layouts) were upgraded to Mojo 1.1.0 and integrated into `src/llamojo/`.
 4. **Binary Package Precompilation (`.mojoc`)**:
    ```bash
@@ -175,28 +175,35 @@ In Mojo 1.1.0, sublibraries are imported without code changes or wrapper overhea
 - **Top-K Dispatch**: Selects top-$k$ active experts per token (e.g. $k=2$) and renormalizes routing weights.
 - **Selective Execution**: Evaluates only the active expert FFN branches via multi-matrix fused SwiGLU (`matmul_quant_fused[2]`) and down-projection, accumulating weighted outputs into the residual stream.
 
-### 4.16 CLI Utilities & HTTP Inference Server (`tools/`)
-- [`tools/llama_cli.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_cli.mojo): Standalone interactive command-line generation tool.
-- [`tools/llama_bench.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_bench.mojo): Micro-benchmarking harness measuring prompt processing and generation throughput (tok/s).
-- [`tools/llama_quantize.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_quantize.mojo): CLI interface for model quantization.
-- [`tools/llama_server.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_server.mojo): Zero-dependency HTTP inference server using POSIX socket syscalls.
+### 4.16 CPU Micro-Architecture Optimizations (`src/llamojo/backend/micro_arch.mojo`)
+- **Cache-Tiled GEMV**: Cache-resident matrix-vector multiplication partitioning large row dimensions into `L2_BLOCK_SIZE = 256` blocks, keeping active activations and quantized weight blocks resident in CPU L1/L2 caches.
+- **VNNI & BF16 Vector Dot Acceleration**: SIMD int8 vector dot kernels modeled after `vpdpbusd` and vectorized 16-element bfloat16 dot products with F32 accumulation.
+- **CPU FlashAttention**: Online tiled attention with running tile max ($m$) and normalization ($l$), eliminating $O(S^2)$ quadratic workspace RAM allocations and memory stalls during prompt processing.
+- **NUMA Topology & Affinity**: Core thread pinning via `sched_setaffinity` syscalls and multi-socket NUMA node detection via `/sys/devices/system/node` for multi-socket NUMA hardware.
+
+### 4.17 CLI Utilities & HTTP Inference Server (`tools/`)
+- [`tools/llama_cli.mojo`](../tools/llama_cli.mojo): Standalone interactive command-line generation tool.
+- [`tools/llama_bench.mojo`](../tools/llama_bench.mojo): Micro-benchmarking harness measuring prompt processing and generation throughput (tok/s).
+- [`tools/llama_quantize.mojo`](../tools/llama_quantize.mojo): CLI interface for model quantization.
+- [`tools/llama_server.mojo`](../tools/llama_server.mojo): Zero-dependency HTTP inference server using POSIX socket syscalls.
 
 ---
 
 ## 5. Verification & Testing
 
-All modules are verified via the automated test runner [`run-tests.sh`](file:///mnt/c/Documents/Mojo/llamojo/run-tests.sh):
+All modules are verified via the automated test runner [`run-tests.sh`](../run-tests.sh):
 
 | Test Script | Validated Subsystems | Status |
 | :--- | :--- | :--- |
-| [`tests/test_gguf.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_gguf.mojo) | GGUF v3 parsing, `mmap` vs `heap` binding, non-owning `Matrix` views, GGML type block sizes | Passed |
-| [`tests/test_llama_api.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_llama_api.mojo) | `llama.h` API, model inspection, persistent spin-barrier multi-worker pool | Passed |
-| [`tests/test_kernels.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_kernels.mojo) | Fused RMSNorm+Res, SwiGLU, RoPE rotation, Q8_0 quant, `k4_scale`, Q4_K / MXFP4 dot, multi-matrix fusion ($n=3$) | Passed |
-| [`tests/test_context_decode.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_context_decode.mojo) | KV Cache, PageTable allocation, sequence manipulation, `llama_batch`, multi-layer `llama_decode` forward pass | Passed |
-| [`tests/test_vocab_sampler.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_vocab_sampler.mojo) | GGUF vocabulary BPE & SentencePiece Unigram (Viterbi trellis) tokenization, detokenization, composable sampler pipeline (penalties, temp, top-k, top-p, greedy), block quantizers (Q4_0, Q8_0, Q4_K, Q6_K), and full metadata preservation serialization | Passed |
-| [`tests/test_lora.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_lora.mojo) | Synthetic LoRA adapter generation, GGUF adapter parsing, rank/alpha extraction, Delta W calculation ($B \cdot A$), and online weight merging into live models | Passed |
-| [`tests/test_grammar.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_grammar.mojo) | GBNF specification parser, standard presets (JSON, Integer, Float), balanced prefix validation, sampler logit bitmasking, and state transitions | Passed |
-| [`tests/test_moe.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_moe.mojo) | Sparse Mixture-of-Experts routing dot products, softmax normalization, top-k selection ordering, and end-to-end MoE decode forward pass | Passed |
-| [`tests/test_c_abi.c`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_c_abi.c) | Direct dynamic linking of `build/libllama.so` with `gcc -lllama`, verifying C-ABI function signatures, raw opaque pointers, backend lifecycle, capabilities query, greedy sampler creation, LoRA adapter lifecycle, and GBNF grammar C-ABI lifecycle | Passed |
-| `mojo build --emit shared-lib` | Clean native shared library generation ([`build/libllama.so`](file:///mnt/c/Documents/Mojo/llamojo/build/libllama.so) — 471 KB) | Passed (0 errors) |
-| `mojo precompile` | Clean binary package generation ([`build/llamojo.mojoc`](file:///mnt/c/Documents/Mojo/llamojo/build/llamojo.mojoc) — 394 KB) | Passed (0 errors) |
+| [`tests/test_gguf.mojo`](../tests/test_gguf.mojo) | GGUF v3 parsing, `mmap` vs `heap` binding, non-owning `Matrix` views, GGML type block sizes | Passed |
+| [`tests/test_llama_api.mojo`](../tests/test_llama_api.mojo) | `llama.h` API, model inspection, persistent spin-barrier multi-worker pool | Passed |
+| [`tests/test_kernels.mojo`](../tests/test_kernels.mojo) | Fused RMSNorm+Res, SwiGLU, RoPE rotation, Q8_0 quant, `k4_scale`, Q4_K / MXFP4 dot, multi-matrix fusion ($n=3$) | Passed |
+| [`tests/test_context_decode.mojo`](../tests/test_context_decode.mojo) | KV Cache, PageTable allocation, sequence manipulation, `llama_batch`, multi-layer `llama_decode` forward pass | Passed |
+| [`tests/test_vocab_sampler.mojo`](../tests/test_vocab_sampler.mojo) | GGUF vocabulary BPE & SentencePiece Unigram (Viterbi trellis) tokenization, detokenization, composable sampler pipeline (penalties, temp, top-k, top-p, greedy), block quantizers (Q4_0, Q8_0, Q4_K, Q6_K), and full metadata preservation serialization | Passed |
+| [`tests/test_lora.mojo`](../tests/test_lora.mojo) | Synthetic LoRA adapter generation, GGUF adapter parsing, rank/alpha extraction, Delta W calculation ($B \cdot A$), and online weight merging into live models | Passed |
+| [`tests/test_grammar.mojo`](../tests/test_grammar.mojo) | GBNF specification parser, standard presets (JSON, Integer, Float), balanced prefix validation, sampler logit bitmasking, and state transitions | Passed |
+| [`tests/test_moe.mojo`](../tests/test_moe.mojo) | Sparse Mixture-of-Experts routing dot products, softmax normalization, top-k selection ordering, and end-to-end MoE decode forward pass | Passed |
+| [`tests/test_micro_arch.mojo`](../tests/test_micro_arch.mojo) | L1/L2 cache-tiled GEMV, BF16 SIMD dot products, CPU FlashAttention online tiled softmax ($O(1)$ memory), and NUMA core pinning / topology queries | Passed |
+| [`tests/test_c_abi.c`](../tests/test_c_abi.c) | Direct dynamic linking of `build/libllama.so` with `gcc -lllama`, verifying C-ABI function signatures, raw opaque pointers, backend lifecycle, capabilities query, greedy sampler creation, LoRA adapter lifecycle, GBNF grammar C-ABI lifecycle, and NUMA querying / thread pinning | Passed |
+| `mojo build --emit shared-lib` | Clean native shared library generation ([`build/libllama.so`](../build/libllama.so) — 471 KB) | Passed (0 errors) |
+| `mojo precompile` | Clean binary package generation ([`build/llamojo.mojoc`](../build/llamojo.mojoc) — 394 KB) | Passed (0 errors) |

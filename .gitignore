@@ -2,3 +2,4 @@ build/
 vendor/MojoLlama
 build/**
 build/libllama.so
+data/

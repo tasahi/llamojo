@@ -37,6 +37,10 @@ llama_grammar_p llama_grammar_init(const char* grammar_str);
 void llama_grammar_free(llama_grammar_p grammar);
 llama_sampler_p llama_sampler_init_grammar(const char* grammar_str);
 
+bool llama_numa_is_available(void);
+int32_t llama_numa_node_count(void);
+bool llama_numa_pin_thread(int32_t core_id);
+
 int main(void) {
     printf("=== Testing llamojo libllama.so C-ABI ===\n");
 
@@ -77,6 +81,14 @@ int main(void) {
     assert(g_smpl != NULL);
     llama_sampler_free(g_smpl);
     printf("  llama_grammar C-ABI lifecycle verified\n");
+
+    // Test NUMA Micro-Architecture C-ABI functions
+    bool numa_avail = llama_numa_is_available();
+    int32_t nodes = llama_numa_node_count();
+    assert(nodes >= 1);
+    bool pin_ok = llama_numa_pin_thread(0);
+    assert(pin_ok == true);
+    printf("  NUMA C-ABI query & pin verified: avail=%d, nodes=%d\n", numa_avail, nodes);
 
     llama_backend_free();
     printf("=== C-ABI integration test passed! ✓ ===\n");

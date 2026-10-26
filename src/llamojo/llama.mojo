@@ -60,6 +60,7 @@ from .backend import (
     forward_layer_dense,
     rms_norm,
     dot_quant_row,
+    dequantize_row,
     f16_to_f32,
 )
 
@@ -183,6 +184,44 @@ struct llama_model(Movable):
             if gguf.has_tensor(pfx + "attn_q.weight"):
                 try:
                     lw.dtype = gguf.get_tensor(pfx + "attn_q.weight").dtype
+                except:
+                    pass
+            lw.dtype_q = lw.dtype
+            lw.dtype_k = lw.dtype
+            lw.dtype_v = lw.dtype
+            lw.dtype_o = lw.dtype
+            lw.dtype_gate = lw.dtype
+            lw.dtype_up = lw.dtype
+            lw.dtype_down = lw.dtype
+
+            if gguf.has_tensor(pfx + "attn_k.weight"):
+                try:
+                    lw.dtype_k = gguf.get_tensor(pfx + "attn_k.weight").dtype
+                except:
+                    pass
+            if gguf.has_tensor(pfx + "attn_v.weight"):
+                try:
+                    lw.dtype_v = gguf.get_tensor(pfx + "attn_v.weight").dtype
+                except:
+                    pass
+            if gguf.has_tensor(pfx + "attn_output.weight"):
+                try:
+                    lw.dtype_o = gguf.get_tensor(pfx + "attn_output.weight").dtype
+                except:
+                    pass
+            if gguf.has_tensor(pfx + "ffn_gate.weight"):
+                try:
+                    lw.dtype_gate = gguf.get_tensor(pfx + "ffn_gate.weight").dtype
+                except:
+                    pass
+            if gguf.has_tensor(pfx + "ffn_up.weight"):
+                try:
+                    lw.dtype_up = gguf.get_tensor(pfx + "ffn_up.weight").dtype
+                except:
+                    pass
+            if gguf.has_tensor(pfx + "ffn_down.weight"):
+                try:
+                    lw.dtype_down = gguf.get_tensor(pfx + "ffn_down.weight").dtype
                 except:
                     pass
             self.layers.append(lw^)
@@ -519,23 +558,11 @@ def llama_decode(ctx: llama_context_p, batch: llama_batch) -> Int32:
         else:
             var emb_ptr = model[].token_embd
             var emb_type = model[].token_embd_type
-            if emb_type == GGMLType.F32:
-                var f32_emb = emb_ptr.unsafe_bitcast[Float32]().unsafe_offset(Int(token) * dim)
-                unsafe_memcpy(dest=ctx[].x, src=f32_emb, count=dim)
-            elif emb_type == GGMLType.F16:
-                var f16_emb = emb_ptr.unsafe_offset(Int(token) * dim * 2)
-                for i in range(dim):
-                    var lo = UInt16(f16_emb[unsafe_offset=i * 2])
-                    var hi = UInt16(f16_emb[unsafe_offset=i * 2 + 1])
-                    ctx[].x[unsafe_offset=i] = f16_to_f32((hi << 8) | lo)
-            else:
-                var blk_sz = Int(ggml_block_size(emb_type))
-                var type_sz = Int(ggml_type_size(emb_type))
-                var bpr = (dim // blk_sz) * type_sz
-                var _ = emb_ptr.unsafe_offset(Int(token) * bpr)
-                # Dequantize token embedding row into x
-                for i in range(dim):
-                    ctx[].x[unsafe_offset=i] = Float32(0.0)
+            var blk_sz = Int(ggml_block_size(emb_type))
+            var type_sz = Int(ggml_type_size(emb_type))
+            var bpr = (dim // blk_sz) * type_sz
+            var row_ptr = emb_ptr.unsafe_offset(Int(token) * bpr)
+            dequantize_row(emb_type, row_ptr, ctx[].x, dim)
 
         # Step 2: Multi-layer transformer forward passes
         for l in range(cfg.n_layers):

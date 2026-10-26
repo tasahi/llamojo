@@ -10,7 +10,7 @@ Usage:
       14 = Q6_K
 """
 
-from std.env import argv
+from std.sys import argv
 from llamojo import (
     GGMLType,
     llama_model_quantize_params,

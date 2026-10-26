@@ -35,7 +35,7 @@ comptime FloatPtr = Pointer[Float32, MutUntrackedOrigin]
 
 @always_inline
 def k4_scale(j: Int, scales_ptr: BytePtr, mut d_out: UInt8, mut m_out: UInt8):
-    """Exact bit-unpacking for 12-byte scales array in Q4_K and Q5_K superblocks."""
+    """ Exact bit-unpacking for 12-byte scales array in Q4_K and Q5_K superblocks."""
     if j < 4:
         d_out = scales_ptr[unsafe_offset=j] & UInt8(63)
         m_out = scales_ptr[unsafe_offset=j + 4] & UInt8(63)
@@ -48,9 +48,10 @@ def k4_scale(j: Int, scales_ptr: BytePtr, mut d_out: UInt8, mut m_out: UInt8):
 
 # ─── Fast Q8_0 Activation Vector Quantization ────────────────────────────────
 
+
 @always_inline
 def quantize_row_q8_0(x: FloatPtr, q8: BytePtr, n: Int):
-    """Quantize Float32 vector to Q8_0 format (34 bytes per 32 values) in pure Mojo."""
+    """ Quantize Float32 vector to Q8_0 format (34 bytes per 32 values) in pure Mojo."""
     var nb = n // 32
     for b in range(nb):
         var xo = b * 32
@@ -85,7 +86,7 @@ def quantize_row_q8_0(x: FloatPtr, q8: BytePtr, n: Int):
 
 @always_inline
 def dot_f32_row(w: FloatPtr, x: FloatPtr, nc: Int) -> Float32:
-    """Float32 dot product with SIMD accumulation."""
+    """ Float32 dot product with SIMD accumulation."""
     var acc = F32xW(0.0)
     var i = 0
     while i + SIMD_WIDTH <= nc:
@@ -97,9 +98,10 @@ def dot_f32_row(w: FloatPtr, x: FloatPtr, nc: Int) -> Float32:
         i += 1
     return total
 
+
 @always_inline
 def dot_f16_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
-    """F16 weights dot product against Float32 vector."""
+    """ F16 weights dot product against Float32 vector."""
     var total: Float32 = 0.0
     for i in range(nc):
         var lo = UInt16(w[unsafe_offset=i * 2])
@@ -108,9 +110,10 @@ def dot_f16_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
         total += wf * x[unsafe_offset=i]
     return total
 
+
 @always_inline
 def dot_q4_0_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
-    """Q4_0 dot product: 32 elements per 18 bytes [2B scale, 16B nibbles]."""
+    """ Q4_0 dot product: 32 elements per 18 bytes [2B scale, 16B nibbles]."""
     var bpr = nc // 32
     var total: Float32 = 0.0
     for blk in range(bpr):
@@ -127,9 +130,10 @@ def dot_q4_0_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
         total += sum_i * d
     return total
 
+
 @always_inline
 def dot_q4_1_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
-    """Q4_1 dot product: 32 elements per 20 bytes [2B d, 2B m, 16B nibbles]."""
+    """ Q4_1 dot product: 32 elements per 20 bytes [2B d, 2B m, 16B nibbles]."""
     var bpr = nc // 32
     var total: Float32 = 0.0
     for blk in range(bpr):
@@ -150,9 +154,10 @@ def dot_q4_1_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
         total += sum_d * d + sum_m * m
     return total
 
+
 @always_inline
 def dot_q5_0_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
-    """Q5_0 dot product: 32 elements per 22 bytes [2B d, 4B qh, 16B ql]."""
+    """ Q5_0 dot product: 32 elements per 22 bytes [2B d, 4B qh, 16B ql]."""
     var bpr = nc // 32
     var total: Float32 = 0.0
     for blk in range(bpr):
@@ -171,9 +176,10 @@ def dot_q5_0_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
         total += sum_i * d
     return total
 
+
 @always_inline
 def dot_q8_0_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
-    """Q8_0 dot product: 32 elements per 34 bytes [2B d, 32B int8]."""
+    """ Q8_0 dot product: 32 elements per 34 bytes [2B d, 32B int8]."""
     var bpr = nc // 32
     var total: Float32 = 0.0
     for blk in range(bpr):
@@ -187,9 +193,10 @@ def dot_q8_0_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
         total += sum_i * d
     return total
 
+
 @always_inline
 def dot_q4_k_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
-    """Q4_K dot product (256-element superblock, 144 bytes). Bit-exact with llama.cpp."""
+    """ Q4_K dot product (256-element superblock, 144 bytes). Bit-exact with llama.cpp."""
     var bpr = nc // 256
     var total: Float32 = 0.0
     for blk in range(bpr):
@@ -227,9 +234,10 @@ def dot_q4_k_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
             q_off += 32
     return total
 
+
 @always_inline
 def dot_q5_k_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
-    """Q5_K dot product (256-element superblock, 176 bytes). Bit-exact with llama.cpp."""
+    """ Q5_K dot product (256-element superblock, 176 bytes). Bit-exact with llama.cpp."""
     var bpr = nc // 256
     var total: Float32 = 0.0
     for blk in range(bpr):
@@ -271,9 +279,10 @@ def dot_q5_k_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
             is_idx += 2
     return total
 
+
 @always_inline
 def dot_q6_k_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
-    """Q6_K dot product (256-element superblock, 210 bytes). Bit-exact with llama.cpp."""
+    """ Q6_K dot product (256-element superblock, 210 bytes). Bit-exact with llama.cpp."""
     var bpr = nc // 256
     var total: Float32 = 0.0
     for blk in range(bpr):
@@ -284,21 +293,136 @@ def dot_q6_k_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
         var d = load_f16_scale(w, bo + 208)      # 2 bytes
         var xo = blk * 256
 
-        for j in range(0, 256, 16):
-            var sc = Float32(bitcast[DType.int8](sc_ptr[unsafe_offset=j // 16])) * d
-            for vi in range(16):
-                var elem_idx = j + vi
-                var lo = Float32((ql_ptr[unsafe_offset=elem_idx // 2] >> UInt8((elem_idx % 2) * 4)) & UInt8(0x0F))
-                var qh_byte = elem_idx // 4
-                var qh_shift = UInt8((elem_idx % 4) * 2)
-                var hi = Float32(((qh_ptr[unsafe_offset=qh_byte] >> qh_shift) & UInt8(0x03)) << UInt8(4))
-                var val = (lo + hi - Float32(32)) * sc
-                total += val * x[unsafe_offset=xo + elem_idx]
+        var ql_off = 0
+        var qh_off = 0
+        var sc_off = 0
+        for n in range(0, 256, 128):
+            for l in range(32):
+                var is_idx = l // 16
+                var q1 = Float32(Int32((ql_ptr[unsafe_offset=ql_off + l + 0] & 0x0F) | (((qh_ptr[unsafe_offset=qh_off + l] >> 0) & 3) << 4)) - 32)
+                var q2 = Float32(Int32((ql_ptr[unsafe_offset=ql_off + l + 32] & 0x0F) | (((qh_ptr[unsafe_offset=qh_off + l] >> 2) & 3) << 4)) - 32)
+                var q3 = Float32(Int32((ql_ptr[unsafe_offset=ql_off + l + 0] >> 4) | (((qh_ptr[unsafe_offset=qh_off + l] >> 4) & 3) << 4)) - 32)
+                var q4 = Float32(Int32((ql_ptr[unsafe_offset=ql_off + l + 32] >> 4) | (((qh_ptr[unsafe_offset=qh_off + l] >> 6) & 3) << 4)) - 32)
+
+                var s1 = Float32(bitcast[DType.int8](sc_ptr[unsafe_offset=sc_off + is_idx + 0])) * d
+                var s2 = Float32(bitcast[DType.int8](sc_ptr[unsafe_offset=sc_off + is_idx + 2])) * d
+                var s3 = Float32(bitcast[DType.int8](sc_ptr[unsafe_offset=sc_off + is_idx + 4])) * d
+                var s4 = Float32(bitcast[DType.int8](sc_ptr[unsafe_offset=sc_off + is_idx + 6])) * d
+
+                total += s1 * q1 * x[unsafe_offset=xo + n + l + 0]
+                total += s2 * q2 * x[unsafe_offset=xo + n + l + 32]
+                total += s3 * q3 * x[unsafe_offset=xo + n + l + 64]
+                total += s4 * q4 * x[unsafe_offset=xo + n + l + 96]
+
+            ql_off += 64
+            qh_off += 32
+            sc_off += 8
     return total
+
+
+@always_inline
+def dequantize_row(dtype: UInt32, weight_row_ptr: BytePtr, dst: FloatPtr, nc: Int):
+    """ Dequantize a single row into dst Float32 buffer."""
+    if dtype == GGMLType.F32:
+        var src_f32 = weight_row_ptr.unsafe_bitcast[Float32]()
+        for i in range(nc):
+            dst[unsafe_offset=i] = src_f32[unsafe_offset=i]
+    elif dtype == GGMLType.F16:
+        for i in range(nc):
+            dst[unsafe_offset=i] = f16_to_f32(weight_row_ptr.unsafe_bitcast[UInt16]()[unsafe_offset=i])
+    elif dtype == GGMLType.Q8_0:
+        var bpr = nc // 32
+        for blk in range(bpr):
+            var bo = blk * 34
+            var d = load_f16_scale(weight_row_ptr, bo)
+            var xo = blk * 32
+            for j in range(32):
+                var qs = bitcast[DType.int8](weight_row_ptr[unsafe_offset=bo + 2 + j])
+                dst[unsafe_offset=xo + j] = Float32(qs) * d
+    elif dtype == GGMLType.Q4_0:
+        var bpr = nc // 32
+        for blk in range(bpr):
+            var bo = blk * 18
+            var d = load_f16_scale(weight_row_ptr, bo)
+            var xo = blk * 32
+            for j in range(16):
+                var p = weight_row_ptr[unsafe_offset=bo + 2 + j]
+                var lo = Float32(Int32(p & 0x0F) - 8)
+                var hi = Float32(Int32(p >> 4) - 8)
+                dst[unsafe_offset=xo + j] = lo * d
+                dst[unsafe_offset=xo + j + 16] = hi * d
+    elif dtype == GGMLType.Q4_K:
+        var bpr = nc // 256
+        for blk in range(bpr):
+            var bo = blk * 144
+            var d = load_f16_scale(weight_row_ptr, bo)
+            var dm = load_f16_scale(weight_row_ptr, bo + 2)
+            var scales_ptr = weight_row_ptr.unsafe_offset(bo + 4)
+            var qs_ptr = weight_row_ptr.unsafe_offset(bo + 16)
+            var xo = blk * 256
+            var is_idx = 0
+            var q_off = 0
+            for s in range(0, 256, 64):
+                var sc1: UInt8 = 0
+                var sc2: UInt8 = 0
+                var m1: UInt8 = 0
+                var m2: UInt8 = 0
+                k4_scale(is_idx, scales_ptr, sc1, m1)
+                k4_scale(is_idx + 1, scales_ptr, sc2, m2)
+                var d1 = d * Float32(sc1)
+                var dm1 = dm * Float32(m1)
+                var d2 = d * Float32(sc2)
+                var dm2 = dm * Float32(m2)
+                for j in range(32):
+                    var p = qs_ptr[unsafe_offset=q_off + j]
+                    var q1 = Float32(p & 0x0F)
+                    var q2 = Float32(p >> 4)
+                    dst[unsafe_offset=xo + s + j] = d1 * q1 - dm1
+                    dst[unsafe_offset=xo + s + 32 + j] = d2 * q2 - dm2
+                is_idx += 2
+                q_off += 32
+    elif dtype == GGMLType.Q6_K:
+        var bpr = nc // 256
+        for blk in range(bpr):
+            var bo = blk * 210
+            var ql_ptr = weight_row_ptr.unsafe_offset(bo)
+            var qh_ptr = weight_row_ptr.unsafe_offset(bo + 128)
+            var sc_ptr = weight_row_ptr.unsafe_offset(bo + 192)
+            var d = load_f16_scale(weight_row_ptr, bo + 208)
+            var xo = blk * 256
+
+            var ql_off = 0
+            var qh_off = 0
+            var sc_off = 0
+            for n in range(0, 256, 128):
+                for l in range(32):
+                    var is_idx = l // 16
+                    var q1 = Float32(Int32((ql_ptr[unsafe_offset=ql_off + l + 0] & 0x0F) | (((qh_ptr[unsafe_offset=qh_off + l] >> 0) & 3) << 4)) - 32)
+                    var q2 = Float32(Int32((ql_ptr[unsafe_offset=ql_off + l + 32] & 0x0F) | (((qh_ptr[unsafe_offset=qh_off + l] >> 2) & 3) << 4)) - 32)
+                    var q3 = Float32(Int32((ql_ptr[unsafe_offset=ql_off + l + 0] >> 4) | (((qh_ptr[unsafe_offset=qh_off + l] >> 4) & 3) << 4)) - 32)
+                    var q4 = Float32(Int32((ql_ptr[unsafe_offset=ql_off + l + 32] >> 4) | (((qh_ptr[unsafe_offset=qh_off + l] >> 6) & 3) << 4)) - 32)
+
+                    var s1 = Float32(bitcast[DType.int8](sc_ptr[unsafe_offset=sc_off + is_idx + 0])) * d
+                    var s2 = Float32(bitcast[DType.int8](sc_ptr[unsafe_offset=sc_off + is_idx + 2])) * d
+                    var s3 = Float32(bitcast[DType.int8](sc_ptr[unsafe_offset=sc_off + is_idx + 4])) * d
+                    var s4 = Float32(bitcast[DType.int8](sc_ptr[unsafe_offset=sc_off + is_idx + 6])) * d
+
+                    dst[unsafe_offset=xo + n + l + 0] = s1 * q1
+                    dst[unsafe_offset=xo + n + l + 32] = s2 * q2
+                    dst[unsafe_offset=xo + n + l + 64] = s3 * q3
+                    dst[unsafe_offset=xo + n + l + 96] = s4 * q4
+
+                ql_off += 64
+                qh_off += 32
+                sc_off += 8
+    else:
+        for i in range(nc):
+            dst[unsafe_offset=i] = Float32(0.0)
+
 
 @always_inline
 def dot_mxfp4_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
-    """MXFP4 dot product: 32 elements per 17 bytes [16B nibbles, 1B E8M0 scale]."""
+    """ MXFP4 dot product: 32 elements per 17 bytes [16B nibbles, 1B E8M0 scale]."""
     var bpr = nc // 32
     var total: Float32 = 0.0
     for blk in range(bpr):
@@ -331,16 +455,17 @@ def dot_mxfp4_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
         total += sum_i * sf
     return total
 
+
 # ─── Multi-Format Dispatcher for a Single Row ────────────────────────────────
 
 @always_inline
 def dot_quant_row(
-    dtype: UInt32,
-    weight_row_ptr: BytePtr,
-    x: FloatPtr,
-    nc: Int,
-) -> Float32:
-    """Compute dot product between one row of quantized weights and Float32 input."""
+        dtype: UInt32,
+        weight_row_ptr: BytePtr,
+        x: FloatPtr,
+        nc: Int,
+    ) -> Float32:
+    """ Compute dot product between one row of quantized weights and Float32 input."""
     if dtype == GGMLType.F32:
         return dot_f32_row(weight_row_ptr.unsafe_bitcast[Float32](), x, nc)
     elif dtype == GGMLType.F16:
@@ -368,19 +493,16 @@ def dot_quant_row(
 # ─── Horizontal Multi-Matrix Fusion (QKV n=3, Gate/Up n=2) ───────────────────
 
 @always_inline
-def matmul_quant_fused[
-    n: Int,
-](
-    dtype: UInt32,
-    C: StaticTuple[FloatPtr, n],
-    x: FloatPtr,
-    W: StaticTuple[BytePtr, n],
-    row_start: Int,
-    row_end: Int,
-    nc: Int,
-):
-    """Fused multi-matrix projection across worker row range [row_start, row_end).
-    
+def matmul_quant_fused[ n: Int, ](
+        dtype: UInt32,
+        C: StaticTuple[FloatPtr, n],
+        x: FloatPtr,
+        W: StaticTuple[BytePtr, n],
+        row_start: Int,
+        row_end: Int,
+        nc: Int,
+    ):
+    """ Fused multi-matrix projection across worker row range [row_start, row_end).\n    
     Shares input vector `x` loads across registers for `n` projections simultaneously.
     Used for QKV (n=3) and SwiGLU Gate/Up (n=2).
     """
@@ -393,4 +515,3 @@ def matmul_quant_fused[
             var row_w_ptr = W[k].unsafe_offset(r * bytes_per_row)
             var res = dot_quant_row(dtype, row_w_ptr, x, nc)
             C[k][unsafe_offset=r] = res
-

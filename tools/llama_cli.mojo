@@ -1,10 +1,10 @@
 """CLI tool for text completion and inference using llamojo.
 
 Usage:
-    mojo run -I src -I vendor/llama2.mojo tools/llama_cli.mojo [model.gguf] [prompt] [n_predict]
+    mojo run -I src tools/llama_cli.mojo [model.gguf] [prompt] [n_predict]
 """
 
-from std.env import argv
+from std.sys import argv
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 
@@ -17,7 +17,8 @@ from llamojo import (
     llama_context_default_params,
     llama_init_from_model,
     llama_free,
-    llama_batch_get_one,
+    llama_batch_init,
+    llama_batch_free,
     llama_decode,
     llama_get_logits_ith,
     llama_token,
@@ -43,18 +44,36 @@ from llamojo import (
 def main():
     var args = argv()
     var model_path = "test_model.gguf"
-    var prompt = "Hello, world!"
+    var prompt = "Once upon a time"
     var n_predict = 32
 
-    if len(args) > 1:
-        model_path = args[1]
-    if len(args) > 2:
-        prompt = args[2]
-    if len(args) > 3:
-        try:
-            n_predict = Int(args[3])
-        except:
-            n_predict = 32
+    # Parse arguments (supports positional or flags -m, -p, -n)
+    var idx = 1
+    while idx < len(args):
+        var a = args[idx]
+        if a == "-m" and idx + 1 < len(args):
+            model_path = args[idx + 1]
+            idx += 2
+        elif a == "-p" and idx + 1 < len(args):
+            prompt = args[idx + 1]
+            idx += 2
+        elif a == "-n" and idx + 1 < len(args):
+            try:
+                n_predict = Int(args[idx + 1])
+            except:
+                n_predict = 32
+            idx += 2
+        else:
+            if idx == 1:
+                model_path = a
+            elif idx == 2:
+                prompt = a
+            elif idx == 3:
+                try:
+                    n_predict = Int(a)
+                except:
+                    n_predict = 32
+            idx += 1
 
     print("=== llamojo CLI ===")
     print("Model:", model_path)
@@ -81,7 +100,7 @@ def main():
 
     # Setup vocabulary from model GGUF context
     var vocab = unsafe_alloc[llama_vocab](1)
-    vocab.init_pointee_move(llama_vocab(model[].gguf))
+    vocab.unsafe_write(llama_vocab(model[].gguf))
 
     # Tokenize input prompt
     var prompt_tokens_buf = unsafe_alloc[llama_token](512)
@@ -100,16 +119,18 @@ def main():
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(1337))
 
     # Decode prompt tokens
-    var n_vocab = Int(model[].cfg.vocab_size)
+    var n_vocab = Int(model[].config.vocab_size)
     var piece_buf = unsafe_alloc[UInt8](256)
     var candidates_buf = unsafe_alloc[llama_token_data](n_vocab)
 
-    var cur_token: llama_token = -1
     for i in range(Int(n_tokens)):
         var tok = prompt_tokens_buf[unsafe_offset=i]
-        var b = llama_batch_get_one(tok, Int32(i))
+        var b = llama_batch_init(1, embd=0, n_seq_max=1)
+        b.token[unsafe_offset=0] = tok
+        b.pos[unsafe_offset=0] = Int32(i)
+        b.logits[unsafe_offset=0] = 1 if i == Int(n_tokens) - 1 else 0
         _ = llama_decode(ctx, b)
-        cur_token = tok
+        llama_batch_free(b)
 
     # Generation loop
     print("\n--- Output ---")
@@ -122,10 +143,11 @@ def main():
             candidates_buf[unsafe_offset=v] = llama_token_data(Int32(v), logits[unsafe_offset=v], Float32(0.0))
 
         var cur_p = unsafe_alloc[llama_token_data_array](1)
-        cur_p.init_pointee_move(llama_token_data_array(candidates_buf, n_vocab, False))
+        cur_p.unsafe_write(llama_token_data_array(candidates_buf, n_vocab, False))
 
         var next_tok = llama_sampler_sample(smpl, cur_p)
-        cur_p.free()
+        cur_p.unsafe_deinit_pointee()
+        cur_p.unsafe_free()
 
         if next_tok < 0 or llama_vocab_is_eog(vocab, next_tok):
             break
@@ -135,18 +157,21 @@ def main():
             var piece_str = String(unsafe_from_utf8=Span(unsafe_ptr=piece_buf, length=Int(plen)))
             print(piece_str, end="")
 
-        var b = llama_batch_get_one(next_tok, Int32(Int(n_tokens) + step))
+        var b = llama_batch_init(1, embd=0, n_seq_max=1)
+        b.token[unsafe_offset=0] = next_tok
+        b.pos[unsafe_offset=0] = Int32(Int(n_tokens) + step)
+        b.logits[unsafe_offset=0] = 1
         _ = llama_decode(ctx, b)
+        llama_batch_free(b)
 
     print("\n--- End of Generation ---")
 
-    candidates_buf.free()
-    piece_buf.free()
-    prompt_tokens_buf.free()
+    candidates_buf.unsafe_free()
+    piece_buf.unsafe_free()
+    prompt_tokens_buf.unsafe_free()
     llama_sampler_free(smpl)
-    vocab.destroy_pointee()
-    vocab.free()
+    vocab.unsafe_deinit_pointee()
+    vocab.unsafe_free()
     llama_free(ctx)
     llama_model_free(model)
     llama_backend_free()
-

@@ -227,3 +227,12 @@ from .backend.moe import (
     route_experts,
     forward_moe_ffn,
 )
+from .backend.micro_arch import (
+    gemv_quant_tiled,
+    dot_q8_0_vnni,
+    dot_bf16_vec,
+    flash_attn_cpu,
+    numa_is_available,
+    numa_pin_thread,
+    numa_node_count,
+)

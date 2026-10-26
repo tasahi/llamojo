@@ -73,9 +73,10 @@ struct GGMLType:
     comptime TQ2_0: UInt32 = 35
     comptime MXFP4: UInt32 = 39
 
+
 @always_inline
 def ggml_type_size(t: UInt32) -> UInt64:
-    """Return the byte size of a single block for the given GGMLType."""
+    """ Return the byte size of a single block for the given GGMLType."""
     if t == GGMLType.F32:
         return 4
     elif t == GGMLType.F16:
@@ -145,7 +146,7 @@ def ggml_type_size(t: UInt32) -> UInt64:
 
 @always_inline
 def ggml_block_size(t: UInt32) -> UInt64:
-    """Return the number of elements per quantization block for the given GGMLType."""
+    """ Return the number of elements per quantization block for the given GGMLType."""
     if t == GGMLType.F32 or t == GGMLType.F16 or t == GGMLType.BF16:
         return 1
     elif t == GGMLType.I8 or t == GGMLType.I16 or t == GGMLType.I32 or t == GGMLType.I64 or t == GGMLType.F64:
@@ -185,7 +186,7 @@ def ggml_block_size(t: UInt32) -> UInt64:
 
 @always_inline
 def ggml_type_size_in_bytes(dtype: UInt32, n_elements: UInt64) -> UInt64:
-    """Calculate total byte size for a tensor of `n_elements` with type `dtype`."""
+    """ Calculate total byte size for a tensor of `n_elements` with type `dtype`."""
     var blk_sz = ggml_block_size(dtype)
     if blk_sz == 0:
         return 0
@@ -193,7 +194,7 @@ def ggml_type_size_in_bytes(dtype: UInt32, n_elements: UInt64) -> UInt64:
     return n_blocks * ggml_type_size(dtype)
 
 def ggml_type_name(t: UInt32) -> String:
-    """Return human-readable name for a GGMLType."""
+    """ Return human-readable name for a GGMLType."""
     if t == GGMLType.F32:
         return "F32"
     elif t == GGMLType.F16:
@@ -315,8 +316,7 @@ struct llama_token_data_array(ImplicitlyCopyable, Copyable, Movable):
     var selected: Int64
     var sorted: Bool
 
-    def __init__(
-        out self,
+    def __init__( out self,
         data: Pointer[llama_token_data, MutUntrackedOrigin],
         size: Int,
         sorted: Bool = False,
@@ -345,6 +345,7 @@ struct ModelConfig(ImplicitlyCopyable, Copyable, Movable):
     var rope_theta: Float32      # {arch}.rope.freq_base (default 10000.0)
     var rope_freq_scale: Float32 # {arch}.rope.scaling.factor (default 1.0)
     var norm_eps: Float32        # {arch}.attention.layer_norm_rms_epsilon (default 1e-5)
+    var rope_type: Int32         # 0: NORM (interleaved), 2: NEOX (half-split)
     var n_experts: Int           # {arch}.expert_count (0 for dense)
     var n_experts_used: Int      # {arch}.expert_used_count (0 for dense)
     var quant_type: UInt32       # Primary weight GGMLType
@@ -363,6 +364,7 @@ struct ModelConfig(ImplicitlyCopyable, Copyable, Movable):
         self.rope_theta = 10000.0
         self.rope_freq_scale = 1.0
         self.norm_eps = 1e-5
+        self.rope_type = 0
         self.n_experts = 0
         self.n_experts_used = 0
         self.quant_type = GGMLType.F32

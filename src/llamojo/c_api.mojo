@@ -77,6 +77,11 @@ from llamojo.grammar import (
     llama_grammar_init as _grammar_init,
     llama_grammar_free as _grammar_free,
 )
+from llamojo.backend.micro_arch import (
+    numa_is_available as _numa_is_available,
+    numa_pin_thread as _numa_pin_thread,
+    numa_node_count as _numa_node_count,
+)
 from llamojo.vocab import (
     llama_vocab,
     llama_vocab_p,
@@ -543,3 +548,17 @@ def llama_sampler_init_grammar(
 ) abi("C") -> llama_sampler_p:
     var g_str = _c_str_to_string(grammar_str)
     return _sampler_init_grammar(g_str)
+
+# ─── Micro-Architecture & NUMA Exports (Phase 11) ────────────────────────────
+
+@export("llama_numa_is_available")
+def llama_numa_is_available() abi("C") -> Bool:
+    return _numa_is_available()
+
+@export("llama_numa_node_count")
+def llama_numa_node_count() abi("C") -> Int32:
+    return Int32(_numa_node_count())
+
+@export("llama_numa_pin_thread")
+def llama_numa_pin_thread(core_id: Int32) abi("C") -> Bool:
+    return _numa_pin_thread(Int(core_id))
