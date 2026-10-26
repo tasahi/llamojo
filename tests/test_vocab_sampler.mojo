@@ -2,6 +2,7 @@
 
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
+from std.testing import assert_true, assert_equal
 
 from llamojo import (
     write_synthetic_gguf,
@@ -14,13 +15,20 @@ from llamojo import (
     llama_model_quantize,
     llama_model_quantize_default_params,
     GGMLType,
+    VOCAB_TYPE_SPM,
+    VOCAB_TYPE_BPE,
     llama_vocab,
     llama_vocab_p,
+    tokenize_spm,
+    tokenize_bpe,
+    tokenize_text,
     llama_tokenize,
     llama_token_to_piece,
     llama_detokenize,
     llama_vocab_bos,
     llama_vocab_eos,
+    llama_vocab_type,
+    llama_vocab_get_score,
     llama_token,
     llama_token_data,
     llama_token_data_array,
@@ -178,12 +186,63 @@ def test_full_metadata_quantization() raises:
     gguf_out.free()
     print("  ✓ Full metadata quantization test passed")
 
+def test_spm_unigram_tokenizer() raises:
+    print("Testing Phase 7 SentencePiece Unigram Tokenizer (Viterbi Trellis)...")
+    var vocab = unsafe_alloc[llama_vocab](1)
+    vocab.unsafe_write(llama_vocab())
+    vocab[].vocab_type = VOCAB_TYPE_SPM
+    vocab[].bos_id = 1
+    vocab[].eos_id = 2
+    vocab[].unk_id = 0
+
+    # Add custom tokens with Unigram log-probabilities
+    # Pieces: " " (space), "hello", "world", "hel", "lo", "wor", "ld"
+    vocab[].tokens.append("<unk>")   # 0
+    vocab[].scores.append(-10.0)
+    vocab[].tokens.append("<s>")     # 1
+    vocab[].scores.append(0.0)
+    vocab[].tokens.append("</s>")    # 2
+    vocab[].scores.append(0.0)
+    vocab[].tokens.append(" ")       # 3
+    vocab[].scores.append(-1.0)
+    vocab[].tokens.append("hello")   # 4
+    vocab[].scores.append(-2.0)
+    vocab[].tokens.append("world")   # 5
+    vocab[].scores.append(-2.0)
+    vocab[].tokens.append("hel")     # 6
+    vocab[].scores.append(-3.0)
+    vocab[].tokens.append("lo")      # 7
+    vocab[].scores.append(-3.0)
+
+    vocab[].vocab_size = len(vocab[].tokens)
+    for i in range(vocab[].vocab_size):
+        vocab[].token_to_id[vocab[].tokens[i]] = Int32(i)
+
+    # Test query helpers
+    var vt = llama_vocab_type(vocab)
+    assert_equal(vt, VOCAB_TYPE_SPM)
+    assert_equal(llama_vocab_get_score(vocab, 4), Float32(-2.0))
+
+    # Tokenize "hello world" using Viterbi Trellis
+    # norm_text will be " hello world" -> tokens: [<s>, " hello", " world"] or [<s>, " ", "hello", " ", "world"]
+    var tokens_buf = unsafe_alloc[llama_token](32)
+    var count = llama_tokenize(vocab, "hello world", tokens_buf, 32, True, False)
+    print("  Unigram tokenized count:", count)
+    assert_true(count >= 3)
+    assert_equal(tokens_buf[unsafe_offset=0], 1) # BOS
+
+    tokens_buf.unsafe_free()
+    vocab.unsafe_deinit_pointee()
+    vocab.unsafe_free()
+    print("  ✓ SentencePiece Unigram Viterbi tokenizer passed")
+
 def main() raises:
     print("============================================================")
-    print("Running Phase 4 & 5 Test Suite (Vocab, Sampler, Full Quantize)")
+    print("Running Phase 4, 5 & 7 Test Suite (Vocab, Sampler, SPM Unigram)")
     print("============================================================")
     test_vocab_tokenizer()
+    test_spm_unigram_tokenizer()
     test_sampler_chain()
     test_quantization_kernels()
     test_full_metadata_quantization()
-    print("All Phase 4 & 5 tests passed! ✓")
+    print("All Phase 4, 5 & 7 tests passed! ✓")

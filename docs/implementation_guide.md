@@ -133,7 +133,9 @@ In Mojo 1.1.0, sublibraries are imported without code changes or wrapper overhea
 ### 4.9 GGUF Vocabulary & Tokenizer Engine (`src/llamojo/vocab.mojo`)
 - **Metadata Extraction**: Extracts vocabulary tokens, scores, token types, and special token markers (`bos`, `eos`, `eot`, `pad`) directly from GGUF metadata dictionaries.
 - **BPE Tokenization**: Byte-Pair Encoding implementation supporting recursive merges, SentencePiece whitespace markers (` `, U+2581), and hexadecimal byte fallbacks (`<0xXX>`).
-- **Public API**: `llama_tokenize`, `llama_token_to_piece`, `llama_detokenize`, and query helpers (`llama_vocab_bos`, `llama_vocab_eos`, `llama_vocab_is_eog`, `llama_vocab_n_tokens`).
+- **SentencePiece Unigram Tokenization (Phase 7)**: Implements dynamic programming Viterbi trellis search finding the maximum-likelihood token segmentation based on vocabulary log-probabilities, supporting byte fallbacks (`<0xXX>`) and whitespace marker handling.
+- **Unified Dispatcher**: `tokenize_text` automatically delegates to BPE or SPM based on detected `tokenizer.ggml.model` metadata (`VOCAB_TYPE_SPM`, `VOCAB_TYPE_BPE`, etc.).
+- **Public API**: `llama_tokenize`, `llama_token_to_piece`, `llama_detokenize`, and query helpers (`llama_vocab_bos`, `llama_vocab_eos`, `llama_vocab_is_eog`, `llama_vocab_n_tokens`, `llama_vocab_type`, `llama_vocab_get_score`).
 
 ### 4.10 Composable Sampling Pipeline (`src/llamojo/sampler.mojo`)
 - **Chain Architecture**: Tagged-union `llama_sampler` struct supporting arbitrary chained filters with `llama_sampler_chain_init` and `llama_sampler_chain_add`.
@@ -174,7 +176,7 @@ All modules are verified via the automated test runner [`run-tests.sh`](file:///
 | [`tests/test_llama_api.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_llama_api.mojo) | `llama.h` API, model inspection, persistent spin-barrier multi-worker pool | Passed |
 | [`tests/test_kernels.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_kernels.mojo) | Fused RMSNorm+Res, SwiGLU, RoPE rotation, Q8_0 quant, `k4_scale`, Q4_K / MXFP4 dot, multi-matrix fusion ($n=3$) | Passed |
 | [`tests/test_context_decode.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_context_decode.mojo) | KV Cache, PageTable allocation, sequence manipulation, `llama_batch`, multi-layer `llama_decode` forward pass | Passed |
-| [`tests/test_vocab_sampler.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_vocab_sampler.mojo) | GGUF vocabulary BPE tokenization/detokenization, composable sampler pipeline (penalties, temp, top-k, top-p, greedy), block quantizers (Q4_0, Q8_0, Q4_K, Q6_K), and full metadata preservation serialization | Passed |
+| [`tests/test_vocab_sampler.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_vocab_sampler.mojo) | GGUF vocabulary BPE & SentencePiece Unigram (Viterbi trellis) tokenization, detokenization, composable sampler pipeline (penalties, temp, top-k, top-p, greedy), block quantizers (Q4_0, Q8_0, Q4_K, Q6_K), and full metadata preservation serialization | Passed |
 | [`tests/test_c_abi.c`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_c_abi.c) | Direct dynamic linking of `build/libllama.so` with `gcc -lllama`, verifying C-ABI function signatures, raw opaque pointers, backend lifecycle, capabilities query, and greedy sampler creation | Passed |
 | `mojo build --emit shared-lib` | Clean native shared library generation ([`build/libllama.so`](file:///mnt/c/Documents/Mojo/llamojo/build/libllama.so) — 447 KB) | Passed (0 errors) |
 | `mojo precompile` | Clean binary package generation ([`build/llamojo.mojoc`](file:///mnt/c/Documents/Mojo/llamojo/build/llamojo.mojoc) — 371 KB) | Passed (0 errors) |

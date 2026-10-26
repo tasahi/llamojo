@@ -93,8 +93,15 @@ from .backend import (
     forward_layer_dense,
 )
 from .vocab import (
+    VOCAB_TYPE_NONE,
+    VOCAB_TYPE_SPM,
+    VOCAB_TYPE_BPE,
+    VOCAB_TYPE_WPM,
     llama_vocab,
     llama_vocab_p,
+    tokenize_bpe,
+    tokenize_spm,
+    tokenize_text,
     llama_tokenize,
     llama_token_to_piece,
     llama_detokenize,
@@ -103,6 +110,8 @@ from .vocab import (
     llama_vocab_eot,
     llama_vocab_is_eog,
     llama_vocab_n_tokens,
+    llama_vocab_type,
+    llama_vocab_get_score,
 )
 from .sampler import (
     llama_sampler,

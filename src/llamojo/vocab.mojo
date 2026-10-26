@@ -22,8 +22,15 @@ from .gguf import GGUFContext
 
 comptime CharList = List[UInt8]
 
+comptime VOCAB_TYPE_NONE: Int32 = 0
+comptime VOCAB_TYPE_SPM: Int32 = 1   # LLaMA / SentencePiece Unigram
+comptime VOCAB_TYPE_BPE: Int32 = 2   # GPT-2 / LLaMA 3 BPE
+comptime VOCAB_TYPE_WPM: Int32 = 3   # WordPiece
+
 struct llama_vocab(Movable):
-    """Vocabulary and BPE merger dictionary populated from GGUF metadata."""
+    """ Vocabulary and BPE/Unigram tokenizer dictionary populated from GGUF metadata."""
+    var model_type: String
+    var vocab_type: Int32
     var tokens: List[String]
     var scores: List[Float32]
     var token_types: List[Int32]
@@ -32,9 +39,12 @@ struct llama_vocab(Movable):
     var eos_id: llama_token
     var eot_id: llama_token
     var pad_id: llama_token
+    var unk_id: llama_token
     var vocab_size: Int
 
     def __init__(out self):
+        self.model_type = "llama"
+        self.vocab_type = VOCAB_TYPE_BPE
         self.tokens = List[String]()
         self.scores = List[Float32]()
         self.token_types = List[Int32]()
@@ -43,9 +53,23 @@ struct llama_vocab(Movable):
         self.eos_id = 2
         self.eot_id = -1
         self.pad_id = -1
+        self.unk_id = 0
         self.vocab_size = 0
 
     def __init__(out self, ref gguf: GGUFContext):
+        self.model_type = gguf.get_string("tokenizer.ggml.model", "llama")
+        if self.model_type == "llama" or self.model_type == "spm":
+            # If scores are present and merges are absent, model is SentencePiece Unigram
+            var merges_opt = gguf.metadata.find("tokenizer.ggml.merges")
+            if not merges_opt:
+                self.vocab_type = VOCAB_TYPE_SPM
+            else:
+                self.vocab_type = VOCAB_TYPE_BPE
+        elif self.model_type == "gpt2" or self.model_type == "bert":
+            self.vocab_type = VOCAB_TYPE_BPE
+        else:
+            self.vocab_type = VOCAB_TYPE_BPE
+
         self.tokens = List[String]()
         self.scores = List[Float32]()
         self.token_types = List[Int32]()
@@ -73,6 +97,7 @@ struct llama_vocab(Movable):
         self.eos_id = Int32(gguf.get_int("tokenizer.ggml.eos_token_id", 2))
         self.eot_id = Int32(gguf.get_int("tokenizer.ggml.eot_token_id", -1))
         self.pad_id = Int32(gguf.get_int("tokenizer.ggml.padding_token_id", -1))
+        self.unk_id = Int32(gguf.get_int("tokenizer.ggml.unknown_token_id", 0))
 
     def find_token(self, s: String) -> Int32:
         """Find token ID for an exact piece string."""
@@ -187,6 +212,112 @@ def tokenize_bpe(
 
     return tokens^
 
+# ─── SentencePiece Unigram Tokenizer Engine (Viterbi Trellis) ───────────────
+
+def tokenize_spm(
+    vocab: llama_vocab_p,
+    text: String,
+    add_special: Bool = True,
+    parse_special: Bool = False,
+) -> List[llama_token]:
+    """Tokenize UTF-8 string using SentencePiece Unigram Viterbi dynamic programming."""
+    var tokens = List[llama_token]()
+    if Int(vocab) == 0:
+        return tokens^
+
+    if add_special and vocab[].bos_id >= 0:
+        tokens.append(vocab[].bos_id)
+
+    var n_bytes = text.byte_length()
+    if n_bytes == 0:
+        return tokens^
+
+    # Normalization: prefix whitespace with SentencePiece marker   (U+2581)
+    var norm_text = " " + text
+
+    var blen = norm_text.byte_length()
+    if blen == 0:
+        return tokens^
+
+    # Viterbi Trellis State: best cumulative score and backpointer to start index
+    var best_scores = List[Float32]()
+    var best_prev = List[Int]()
+    var best_tok = List[llama_token]()
+
+    for _ in range(blen + 1):
+        best_scores.append(Float32(-1e18))
+        best_prev.append(-1)
+        best_tok.append(-1)
+
+    best_scores[0] = Float32(0.0)
+
+    # Forward Viterbi search
+    for i in range(blen):
+        if best_scores[i] <= Float32(-1e17):
+            continue
+
+        var max_sub_len = min(64, blen - i)
+        for sub_len in range(1, max_sub_len + 1):
+            var sub_str = String(norm_text[byte=i:i + sub_len])
+            var tok_id = vocab[].find_token(sub_str)
+            if tok_id != -1:
+                var score = vocab[].scores[Int(tok_id)] if len(vocab[].scores) > Int(tok_id) else Float32(0.0)
+                var new_score = best_scores[i] + score
+                if new_score > best_scores[i + sub_len]:
+                    best_scores[i + sub_len] = new_score
+                    best_prev[i + sub_len] = i
+                    best_tok[i + sub_len] = tok_id
+
+        # Fallback to byte pieces if no token matched from position i
+        if best_scores[i + 1] <= Float32(-1e17):
+            var b = norm_text.unsafe_ptr()[unsafe_offset=i]
+            var hex_digits = "0123456789ABCDEF"
+            var h0 = String(hex_digits[byte=Int(b >> 4):Int((b >> 4) + 1)])
+            var h1 = String(hex_digits[byte=Int(b & 0x0F):Int((b & 0x0F) + 1)])
+            var hex_token = "<0x" + h0 + h1 + ">"
+            var byte_id = vocab[].find_token(hex_token)
+            if byte_id == -1:
+                byte_id = vocab[].unk_id
+            var byte_score = Float32(-10.0)
+            if byte_id >= 0 and len(vocab[].scores) > Int(byte_id):
+                byte_score = vocab[].scores[Int(byte_id)]
+            var fallback_score = best_scores[i] + byte_score
+            if fallback_score > best_scores[i + 1]:
+                best_scores[i + 1] = fallback_score
+                best_prev[i + 1] = i
+                best_tok[i + 1] = byte_id
+
+    # Backward traceback
+    var path_tokens = List[llama_token]()
+    var curr = blen
+    while curr > 0:
+        var p = best_prev[curr]
+        if p == -1:
+            break
+        path_tokens.append(best_tok[curr])
+        curr = p
+
+    # Reverse path tokens
+    var n_path = len(path_tokens)
+    for i in range(n_path - 1, -1, -1):
+        tokens.append(path_tokens[i])
+
+    return tokens^
+
+def tokenize_text(
+    vocab: llama_vocab_p,
+    text: String,
+    add_special: Bool = True,
+    parse_special: Bool = False,
+) -> List[llama_token]:
+    """Unified tokenization router dispatching to BPE or SentencePiece Unigram based on vocab_type."""
+    if Int(vocab) == 0:
+        return List[llama_token]()
+    if vocab[].vocab_type == VOCAB_TYPE_SPM:
+        return tokenize_spm(vocab, text, add_special, parse_special)
+    else:
+        return tokenize_bpe(vocab, text, add_special, parse_special)
+
 def detokenize_text(
     vocab: llama_vocab_p,
     tokens: Pointer[llama_token, MutUntrackedOrigin],
@@ -207,15 +338,15 @@ def detokenize_text(
 # ─── Public llama.h Vocab & Tokenizer API ────────────────────────────────────
 
 def llama_tokenize(
-    vocab: llama_vocab_p,
-    text: String,
-    tokens: Pointer[llama_token, MutUntrackedOrigin],
-    n_tokens_max: Int32,
-    add_special: Bool = True,
-    parse_special: Bool = False,
-) -> Int32:
-    """Tokenize `text` into output buffer `tokens`. Returns number of tokens written or required."""
-    var tok_list = tokenize_bpe(vocab, text, add_special, parse_special)
+        vocab: llama_vocab_p,
+        text: String,
+        tokens: Pointer[llama_token, MutUntrackedOrigin],
+        n_tokens_max: Int32,
+        add_special: Bool = True,
+        parse_special: Bool = False,
+    ) -> Int32:
+    """ Tokenize `text` into output buffer `tokens`. Returns number of tokens written or required."""
+    var tok_list = tokenize_text(vocab, text, add_special, parse_special)
     var count = len(tok_list)
     if count > Int(n_tokens_max):
         return -Int32(count)
@@ -292,3 +423,12 @@ def llama_vocab_n_tokens(vocab: llama_vocab_p) -> Int32:
         return 0
     return Int32(vocab[].vocab_size)
 
+def llama_vocab_type(vocab: llama_vocab_p) -> Int32:
+    if Int(vocab) == 0:
+        return VOCAB_TYPE_NONE
+    return vocab[].vocab_type
+
+def llama_vocab_get_score(vocab: llama_vocab_p, token: llama_token) -> Float32:
+    if Int(vocab) == 0 or token < 0 or Int(token) >= len(vocab[].scores):
+        return Float32(0.0)
+    return vocab[].scores[Int(token)]

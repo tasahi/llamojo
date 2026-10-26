@@ -74,6 +74,8 @@ from llamojo.vocab import (
     llama_vocab_eot as _vocab_eot,
     llama_vocab_is_eog as _vocab_is_eog,
     llama_vocab_n_tokens as _vocab_n_tokens,
+    llama_vocab_type as _vocab_type,
+    llama_vocab_get_score as _vocab_get_score,
 )
 from llamojo.sampler import (
     llama_sampler,
@@ -388,6 +390,14 @@ def llama_vocab_is_eog(vocab: llama_vocab_p, token: llama_token) abi("C") -> Boo
 @export("llama_vocab_n_tokens")
 def llama_vocab_n_tokens(vocab: llama_vocab_p) abi("C") -> Int32:
     return _vocab_n_tokens(vocab)
+
+@export("llama_vocab_type")
+def llama_vocab_type(vocab: llama_vocab_p) abi("C") -> Int32:
+    return _vocab_type(vocab)
+
+@export("llama_vocab_get_score")
+def llama_vocab_get_score(vocab: llama_vocab_p, token: llama_token) abi("C") -> Float32:
+    return _vocab_get_score(vocab, token)
 
 # ─── Composable Sampler Exports ──────────────────────────────────────────────
 

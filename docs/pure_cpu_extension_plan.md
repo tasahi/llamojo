@@ -1,8 +1,8 @@
 # `llamojo` Pure-CPU Extension Roadmap (Phases 5 – 11)
 
 **Document:** `/mnt/c/Documents/Mojo/llamojo/docs/pure_cpu_extension_plan.md`  
-**Status:** In Progress (Phases 5 & 6 Completed, Phases 7–11 Pending)  
-**Prerequisites:** Phases 1–6 Complete (GGUF v2/v3 zero-copy loader, quantized kernels, KV cache / PagedAttention, auto-regressive multi-layer decode, BPE tokenizer, composable sampler pipeline, parallel block quantizers with full metadata preservation, native C-ABI shared library export `libllama.so`, CLI/Server tools).
+**Status:** In Progress (Phases 5, 6 & 7 Completed, Phases 8–11 Pending)  
+**Prerequisites:** Phases 1–7 Complete (GGUF v2/v3 zero-copy loader, quantized kernels, KV cache / PagedAttention, auto-regressive multi-layer decode, BPE & SentencePiece Unigram tokenizers, composable sampler pipeline, parallel block quantizers with full metadata preservation, native C-ABI shared library export `libllama.so`, CLI/Server tools).
 
 ---
 
@@ -15,7 +15,7 @@ flowchart TD
     P4["Phase 4: Tokenizer, Sampler & Quantizer (Completed)"]
     P5["Phase 5: Full GGUF Metadata Mirroring in Quantizer (Completed ✓)"]
     P6["Phase 6: C ABI Compatibility Layer - libllama.so Export (Completed ✓)"]
-    P7["Phase 7: SentencePiece Unigram Tokenizer & Byte-Fallback Refinement"]
+    P7["Phase 7: SentencePiece Unigram Tokenizer & Byte-Fallback Refinement (Completed ✓)"]
     P8["Phase 8: Dynamic LoRA Adapter Ingestion & Online Merging"]
     P9["Phase 9: Full GBNF Grammar Engine & JSON-Schema Parsing Filter"]
     P10["Phase 10: Sparse Mixture-of-Experts (MoE) Routing & Forward Pass"]
@@ -95,13 +95,24 @@ Enable external non-Mojo binaries, Python bindings (`llama-cpp-python`), Rust cr
 
 ---
 
-## Phase 7: SentencePiece Unigram Tokenizer & Tokenizer Variants
+## Phase 7: SentencePiece Unigram Tokenizer & Tokenizer Variants (Completed ✓)
 *Complexity: Moderate | Risk: Low | Target: `src/llamojo/vocab.mojo`*
 
 ### Description
-While BPE covers LLaMA, Mistral, and Qwen, models such as Gemma 1 and T5 utilize the SentencePiece Unigram language model. Phase 7 implements the dynamic programming Viterbi algorithm to parse texts against Unigram vocabulary graphs.
+While BPE covers LLaMA, Mistral, and Qwen, models such as Gemma 1 and T5 utilize the SentencePiece Unigram language model. Phase 7 implements the dynamic programming Viterbi trellis algorithm to parse texts against Unigram vocabulary graphs with byte fallback pieces `<0xXX>`.
 
-### Key Objectives
+### Status & Verification
+- **Status:** **Completed ✓**
+- **Implementation:**
+  - Added `VOCAB_TYPE_SPM`, `VOCAB_TYPE_BPE`, `VOCAB_TYPE_WPM`, `VOCAB_TYPE_UGM` constants to `src/llamojo/vocab.mojo`.
+  - Added `scores` tracking (`List[Float32]`) and `vocab_type` determination based on `tokenizer.ggml.model` metadata.
+  - Implemented `tokenize_spm(text: String, add_bos: Bool)` executing dynamic programming Viterbi trellis search maximizing cumulative log-probability across byte spans up to length 64.
+  - SentencePiece whitespace marker prefixing (` `, `\xe2\x96\x81`) and fallback to `<0xXX>` byte tokens or `<unk>`.
+  - Unified tokenization dispatcher: `tokenize_text(text: String, add_bos: Bool)` routing to BPE or SPM based on detected model vocabulary type.
+  - Added C-ABI exported endpoints: `llama_vocab_type` and `llama_vocab_get_score`.
+- **Verification:** Tested in [`tests/test_vocab_sampler.mojo:test_spm_unigram_tokenizer`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_vocab_sampler.mojo), validating Viterbi segmentation, whitespace prepending, log-probability selection, and byte fallback `<0x61>`.
+
+### Key Objectives Achieved
 1. **Unigram Graph Model**:
    - Detect `tokenizer.ggml.model == "llama"` vs `"gpt2"` vs `"spm"`.
    - Store log-probabilities for all vocabulary pieces.
