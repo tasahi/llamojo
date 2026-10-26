@@ -285,6 +285,9 @@ struct GGUFContext(Movable):
     def get_int(self, key: String, default: Int = 0) -> Int:
         var opt = self.metadata.find(key)
         if opt:
+            if opt.value().vtype == GGUFValueType.ARRAY:
+                if len(opt.value().int_arr) > 0:
+                    return Int(opt.value().int_arr[0])
             return Int(opt.value().int_val)
         return default
 
@@ -352,6 +355,28 @@ struct GGUFContext(Movable):
         cfg.norm_eps = self.get_float(arch + ".attention.layer_norm_rms_epsilon", 1e-5)
         cfg.n_experts = self.get_int(arch + ".expert_count", 0)
         cfg.n_experts_used = self.get_int(arch + ".expert_used_count", 0)
+
+        # Gemma 4 specific architectural metadata
+        if arch == "gemma4":
+            cfg.shared_kv_layers = self.get_int("gemma4.attention.shared_kv_layers", 0)
+            cfg.sliding_window = self.get_int("gemma4.attention.sliding_window", 512)
+            cfg.ple_dim = self.get_int("gemma4.embedding_length_per_layer_input", 256)
+            cfg.logit_softcap = self.get_float("gemma4.final_logit_softcapping", 30.0)
+            cfg.head_dim_swa = self.get_int("gemma4.attention.key_length_swa", 256)
+            cfg.rope_theta_swa = self.get_float("gemma4.rope.freq_base_swa", 10000.0)
+            # Find max intermediate dim if array has different lengths
+            var ff_opt = self.metadata.find("gemma4.feed_forward_length")
+            if ff_opt and ff_opt.value().vtype == GGUFValueType.ARRAY:
+                var n_ff = len(ff_opt.value().int_arr)
+                var max_ff = 0
+                for idx in range(n_ff):
+                    var cur_v = Int(ff_opt.value().int_arr[idx])
+                    if cur_v > max_ff:
+                        max_ff = cur_v
+                if max_ff > 0:
+                    cfg.intermediate_dim = max_ff
+
+        cfg.is_tied_embeddings = not self.has_tensor("output.weight")
 
         # Determine vocab_size from tokenizer.ggml.tokens array or {arch}.vocab_size
         var tok_opt = self.metadata.find("tokenizer.ggml.tokens")

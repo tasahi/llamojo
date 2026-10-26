@@ -332,7 +332,7 @@ struct llama_token_data_array(ImplicitlyCopyable, Copyable, Movable):
 @fieldwise_init
 struct ModelConfig(ImplicitlyCopyable, Copyable, Movable):
     """ Runtime model configuration populated from GGUF metadata."""
-    var arch: String             # e.g. "llama", "qwen2", "gemma2", "mamba"
+    var arch: String             # e.g. "llama", "qwen2", "gemma2", "gemma4", "mamba"
     var name: String             # general.name
     var hidden_dim: Int          # {arch}.embedding_length
     var intermediate_dim: Int    # {arch}.feed_forward_length
@@ -349,6 +349,15 @@ struct ModelConfig(ImplicitlyCopyable, Copyable, Movable):
     var n_experts: Int           # {arch}.expert_count (0 for dense)
     var n_experts_used: Int      # {arch}.expert_used_count (0 for dense)
     var quant_type: UInt32       # Primary weight GGMLType
+
+    # Gemma 4 specific architectural metadata
+    var shared_kv_layers: Int    # Number of upper layers that reuse KV cache (e.g. 20)
+    var sliding_window: Int      # Sliding window attention size (e.g. 512)
+    var ple_dim: Int             # Per-layer input embedding dim (e.g. 256)
+    var logit_softcap: Float32   # Final logit softcapping factor (e.g. 30.0)
+    var head_dim_swa: Int        # SWA head dim (e.g. 256)
+    var rope_theta_swa: Float32  # SWA rope frequency base (e.g. 10000.0)
+    var is_tied_embeddings: Bool # Whether output.weight is tied to token_embd.weight
 
     def __init__(out self):
         self.arch = "llama"
@@ -368,3 +377,11 @@ struct ModelConfig(ImplicitlyCopyable, Copyable, Movable):
         self.n_experts = 0
         self.n_experts_used = 0
         self.quant_type = GGMLType.F32
+
+        self.shared_kv_layers = 0
+        self.sliding_window = 0
+        self.ple_dim = 0
+        self.logit_softcap = 0.0
+        self.head_dim_swa = 0
+        self.rope_theta_swa = 10000.0
+        self.is_tied_embeddings = False
