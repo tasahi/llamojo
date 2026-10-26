@@ -13,6 +13,7 @@ TESTS=(
     "tests/test_kernels.mojo"
     "tests/test_context_decode.mojo"
     "tests/test_vocab_sampler.mojo"
+    "tests/test_lora.mojo"
 )
 
 echo "============================================================"

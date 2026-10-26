@@ -46,6 +46,7 @@ from .gguf import (
     gguf_load_from_file,
 )
 from .kv_cache import LlamaKVCache
+from .lora import llama_lora_adapter, compute_lora_delta
 from .backend import (
     simd_info,
     isa_info,
@@ -67,7 +68,7 @@ comptime FloatPtr = Pointer[Float32, MutUntrackedOrigin]
 # ─── Model & Context Handles (matching llama.h) ──────────────────────────────
 
 struct llama_model(Movable):
-    """Internal representation of a loaded GGUF model (`struct llama_model`)."""
+    """ Internal representation of a loaded GGUF model (`struct llama_model`)."""
     var gguf: GGUFContext
     var config: ModelConfig
     var params: llama_model_params
@@ -738,3 +739,84 @@ def llama_model_is_recurrent(model: llama_model_p) -> Bool:
         return False
     var arch = model[].config.arch
     return arch == "mamba" or arch == "rwkv" or "ssm" in arch
+
+# ─── LoRA Adapter Ingestion and Online Merging (Phase 8) ─────────────────────
+
+def llama_adapter_lora_apply(
+        model: llama_model_p,
+        adapter_path: String,
+        scale: Float32 = 1.0,
+    ) -> Int32:
+    """ Load a LoRA adapter GGUF and apply dynamic additive weights to model."""
+    if Int(model) == 0:
+        return -1
+    try:
+        var adapter = llama_lora_adapter(adapter_path)
+        var alpha = adapter.alpha
+        var rank = adapter.rank
+        var eff_scale = scale * adapter.scale
+        var multiplier = (alpha / Float32(rank)) * eff_scale
+
+        for i in range(len(adapter.pairs)):
+            var pair = adapter.pairs[i]
+            var tensor_name = pair.name
+
+            # Check if this tensor matches output or token_embd
+            if tensor_name == "token_embd.weight":
+                if model[].token_embd_type == GGMLType.F32:
+                    var f32_ptr = model[].token_embd.unsafe_bitcast[Float32]()
+                    var elems = pair.b_rows * pair.a_cols
+                    var delta = unsafe_alloc[Float32](elems)
+                    compute_lora_delta(pair, delta, multiplier)
+                    for j in range(elems):
+                        f32_ptr[unsafe_offset=j] += delta[unsafe_offset=j]
+                    delta.unsafe_free()
+            elif tensor_name == "output.weight":
+                if model[].output_weight_type == GGMLType.F32:
+                    var f32_ptr = model[].output_weight.unsafe_bitcast[Float32]()
+                    var elems = pair.b_rows * pair.a_cols
+                    var delta = unsafe_alloc[Float32](elems)
+                    compute_lora_delta(pair, delta, multiplier)
+                    for j in range(elems):
+                        f32_ptr[unsafe_offset=j] += delta[unsafe_offset=j]
+                    delta.unsafe_free()
+
+            # Check layer weights: blk.{l}.{sub_tensor}
+            for l in range(len(model[].layers)):
+                var pfx = "blk." + String(l) + "."
+                if tensor_name.startswith(pfx):
+                    var pfx_len = pfx.byte_length()
+                    var t_len = tensor_name.byte_length()
+                    var sub_span = tensor_name[byte=pfx_len : t_len]
+                    var sub = String(sub_span)
+                    var target_ptr: BytePtr = null_ptr[UInt8]()
+                    var dtype = model[].layers[l].dtype
+
+                    if sub == "attn_q.weight":
+                        target_ptr = model[].layers[l].wq
+                    elif sub == "attn_k.weight":
+                        target_ptr = model[].layers[l].wk
+                    elif sub == "attn_v.weight":
+                        target_ptr = model[].layers[l].wv
+                    elif sub == "attn_output.weight":
+                        target_ptr = model[].layers[l].wo
+                    elif sub == "ffn_gate.weight":
+                        target_ptr = model[].layers[l].w_gate
+                    elif sub == "ffn_up.weight":
+                        target_ptr = model[].layers[l].w_up
+                    elif sub == "ffn_down.weight":
+                        target_ptr = model[].layers[l].w_down
+
+                    if Int(target_ptr) != 0 and dtype == GGMLType.F32:
+                        var f32_ptr = target_ptr.unsafe_bitcast[Float32]()
+                        var elems = pair.b_rows * pair.a_cols
+                        var delta = unsafe_alloc[Float32](elems)
+                        compute_lora_delta(pair, delta, multiplier)
+                        for j in range(elems):
+                            f32_ptr[unsafe_offset=j] += delta[unsafe_offset=j]
+                        delta.unsafe_free()
+
+        adapter.free()
+        return 0
+    except:
+        return -1

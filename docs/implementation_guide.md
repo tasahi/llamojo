@@ -156,9 +156,14 @@ In Mojo 1.1.0, sublibraries are imported without code changes or wrapper overhea
 
 ### 4.12 C Foreign Function Interface ABI Export (`src/llamojo/c_api.mojo`)
 - **Direct Linkable C-ABI (`libllama.so`)**: Exposes native `@export` symbols with standard `abi("C")` calling conventions matching `llama.h` function signatures for zero-wrapper foreign language integration (C, C++, Rust, `llama-cpp-python`).
-- **Comprehensive API Surface**: Covers backend system lifecycle, model and context instantiation, batch execution, KV cache manipulation, BPE tokenization/detokenization, composable sampler pipeline stages, and quantization.
+- **Comprehensive API Surface**: Covers backend system lifecycle, model and context instantiation, batch execution, KV cache manipulation, BPE and SPM Unigram tokenization/detokenization, composable sampler pipeline stages, quantization, and LoRA adapters.
 
-### 4.13 CLI Utilities & HTTP Inference Server (`tools/`)
+### 4.13 Dynamic LoRA Adapter Engine (`src/llamojo/lora.mojo`)
+- **Metadata & Tensor Ingestion**: Zero-copy parsing of `.gguf` adapter files, pairing `{tensor}.lora_a` and `{tensor}.lora_b` matrices and reading adapter hyperparameters ($\alpha$, $r$).
+- **Scaled Online Additive Merging**: Computes $\Delta W = \frac{\alpha}{r} \cdot \text{scale} \cdot (B \cdot A)$ and merges directly into live base model weights (`llama_adapter_lora_apply`).
+- **Public & C-ABI Interface**: `llama_lora_adapter_init`, `llama_lora_adapter_set`, `llama_lora_adapter_free`, and `llama_adapter_lora_apply`.
+
+### 4.14 CLI Utilities & HTTP Inference Server (`tools/`)
 - [`tools/llama_cli.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_cli.mojo): Standalone interactive command-line generation tool.
 - [`tools/llama_bench.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_bench.mojo): Micro-benchmarking harness measuring prompt processing and generation throughput (tok/s).
 - [`tools/llama_quantize.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_quantize.mojo): CLI interface for model quantization.
@@ -177,6 +182,7 @@ All modules are verified via the automated test runner [`run-tests.sh`](file:///
 | [`tests/test_kernels.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_kernels.mojo) | Fused RMSNorm+Res, SwiGLU, RoPE rotation, Q8_0 quant, `k4_scale`, Q4_K / MXFP4 dot, multi-matrix fusion ($n=3$) | Passed |
 | [`tests/test_context_decode.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_context_decode.mojo) | KV Cache, PageTable allocation, sequence manipulation, `llama_batch`, multi-layer `llama_decode` forward pass | Passed |
 | [`tests/test_vocab_sampler.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_vocab_sampler.mojo) | GGUF vocabulary BPE & SentencePiece Unigram (Viterbi trellis) tokenization, detokenization, composable sampler pipeline (penalties, temp, top-k, top-p, greedy), block quantizers (Q4_0, Q8_0, Q4_K, Q6_K), and full metadata preservation serialization | Passed |
-| [`tests/test_c_abi.c`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_c_abi.c) | Direct dynamic linking of `build/libllama.so` with `gcc -lllama`, verifying C-ABI function signatures, raw opaque pointers, backend lifecycle, capabilities query, and greedy sampler creation | Passed |
-| `mojo build --emit shared-lib` | Clean native shared library generation ([`build/libllama.so`](file:///mnt/c/Documents/Mojo/llamojo/build/libllama.so) — 447 KB) | Passed (0 errors) |
-| `mojo precompile` | Clean binary package generation ([`build/llamojo.mojoc`](file:///mnt/c/Documents/Mojo/llamojo/build/llamojo.mojoc) — 371 KB) | Passed (0 errors) |
+| [`tests/test_lora.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_lora.mojo) | Synthetic LoRA adapter generation, GGUF adapter parsing, rank/alpha extraction, Delta W calculation ($B \cdot A$), and online weight merging into live models | Passed |
+| [`tests/test_c_abi.c`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_c_abi.c) | Direct dynamic linking of `build/libllama.so` with `gcc -lllama`, verifying C-ABI function signatures, raw opaque pointers, backend lifecycle, capabilities query, greedy sampler creation, and LoRA adapter C-ABI lifecycle | Passed |
+| `mojo build --emit shared-lib` | Clean native shared library generation ([`build/libllama.so`](file:///mnt/c/Documents/Mojo/llamojo/build/libllama.so) — 471 KB) | Passed (0 errors) |
+| `mojo precompile` | Clean binary package generation ([`build/llamojo.mojoc`](file:///mnt/c/Documents/Mojo/llamojo/build/llamojo.mojoc) — 394 KB) | Passed (0 errors) |

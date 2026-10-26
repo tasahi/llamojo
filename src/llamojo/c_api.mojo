@@ -62,6 +62,14 @@ from llamojo.llama import (
     llama_model_n_params as _model_n_params,
     llama_model_size as _model_size,
     llama_model_desc as _model_desc,
+    llama_adapter_lora_apply as _adapter_lora_apply,
+)
+from llamojo.lora import (
+    llama_lora_adapter,
+    llama_lora_adapter_p,
+    llama_lora_adapter_init as _lora_adapter_init,
+    llama_lora_adapter_set as _lora_adapter_set,
+    llama_lora_adapter_free as _lora_adapter_free,
 )
 from llamojo.vocab import (
     llama_vocab,
@@ -479,3 +487,33 @@ def llama_model_quantize(
     var inp_str = _c_str_to_string(fname_inp)
     var out_str = _c_str_to_string(fname_out)
     return _model_quantize(inp_str, out_str, params)
+
+# ─── LoRA Adapter Export (Phase 8) ───────────────────────────────────────────
+
+@export("llama_lora_adapter_init")
+def llama_lora_adapter_init(
+    model: llama_model_p,
+    path_lora: Pointer[UInt8, MutUntrackedOrigin],
+) abi("C") -> llama_lora_adapter_p:
+    var path_str = _c_str_to_string(path_lora)
+    return _lora_adapter_init(model.unsafe_bitcast[NoneType](), path_str)
+
+@export("llama_lora_adapter_set")
+def llama_lora_adapter_set(
+    adapter: llama_lora_adapter_p,
+    scale: Float32,
+) abi("C") -> Int32:
+    return _lora_adapter_set(adapter, scale)
+
+@export("llama_lora_adapter_free")
+def llama_lora_adapter_free(adapter: llama_lora_adapter_p) abi("C"):
+    _lora_adapter_free(adapter)
+
+@export("llama_adapter_lora_apply")
+def llama_adapter_lora_apply(
+    model: llama_model_p,
+    path_lora: Pointer[UInt8, MutUntrackedOrigin],
+    scale: Float32,
+) abi("C") -> Int32:
+    var path_str = _c_str_to_string(path_lora)
+    return _adapter_lora_apply(model, path_str, scale)

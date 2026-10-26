@@ -1,8 +1,8 @@
 # `llamojo` Pure-CPU Extension Roadmap (Phases 5 – 11)
 
 **Document:** `/mnt/c/Documents/Mojo/llamojo/docs/pure_cpu_extension_plan.md`  
-**Status:** In Progress (Phases 5, 6 & 7 Completed, Phases 8–11 Pending)  
-**Prerequisites:** Phases 1–7 Complete (GGUF v2/v3 zero-copy loader, quantized kernels, KV cache / PagedAttention, auto-regressive multi-layer decode, BPE & SentencePiece Unigram tokenizers, composable sampler pipeline, parallel block quantizers with full metadata preservation, native C-ABI shared library export `libllama.so`, CLI/Server tools).
+**Status:** In Progress (Phases 5, 6, 7 & 8 Completed, Phases 9–11 Pending)  
+**Prerequisites:** Phases 1–8 Complete (GGUF v2/v3 zero-copy loader, quantized kernels, KV cache / PagedAttention, auto-regressive multi-layer decode, BPE & SentencePiece Unigram tokenizers, composable sampler pipeline, parallel block quantizers with full metadata preservation, native C-ABI shared library export `libllama.so`, dynamic LoRA adapter ingestion and online additive merging, CLI/Server tools).
 
 ---
 
@@ -16,7 +16,7 @@ flowchart TD
     P5["Phase 5: Full GGUF Metadata Mirroring in Quantizer (Completed ✓)"]
     P6["Phase 6: C ABI Compatibility Layer - libllama.so Export (Completed ✓)"]
     P7["Phase 7: SentencePiece Unigram Tokenizer & Byte-Fallback Refinement (Completed ✓)"]
-    P8["Phase 8: Dynamic LoRA Adapter Ingestion & Online Merging"]
+    P8["Phase 8: Dynamic LoRA Adapter Ingestion & Online Merging (Completed ✓)"]
     P9["Phase 9: Full GBNF Grammar Engine & JSON-Schema Parsing Filter"]
     P10["Phase 10: Sparse Mixture-of-Experts (MoE) Routing & Forward Pass"]
     P11["Phase 11: Advanced CPU Micro-Architecture Optimizations (Most Complex)"]
@@ -125,19 +125,33 @@ While BPE covers LLaMA, Mistral, and Qwen, models such as Gemma 1 and T5 utilize
 
 ---
 
-## Phase 8: Dynamic LoRA Adapter Ingestion & Online Merging
+## Phase 8: Dynamic LoRA Adapter Ingestion & Online Merging (Completed ✓)
 *Complexity: Moderate | Risk: Medium | Target: `src/llamojo/lora.mojo`, `src/llamojo/llama.mojo`*
 
 ### Description
 Provide runtime ingestion of Low-Rank Adaptation (LoRA) checkpoint files (`.gguf` adapters) without requiring offline baking or modifying base model weights on disk.
 
-### Key Objectives
+### Status & Verification
+- **Status:** **Completed ✓**
+- **Implementation:**
+  - Created `src/llamojo/lora.mojo` providing `llama_lora_adapter` struct and `LoraTensorPair` container.
+  - Automatically parses GGUF metadata (`adapter.lora.alpha`, `general.base_model.path`) and pairs low-rank matrices (`{tensor}.lora_a` with `{tensor}.lora_b`).
+  - Implemented `compute_lora_delta` and `apply_lora_to_f32_tensor` executing scaled matrix-matrix expansion:
+    $$W_{\text{effective}} = W_{\text{base}} + \frac{\alpha}{r} \cdot \text{scale} \cdot (B \cdot A)$$
+  - Integrated `llama_adapter_lora_apply` into `src/llamojo/llama.mojo` for dynamically updating base weights (`token_embd.weight`, `output.weight`, and per-layer attention/FFN projections).
+  - Exported standard C-ABI functions in `src/llamojo/c_api.mojo`: `llama_lora_adapter_init`, `llama_lora_adapter_set`, `llama_lora_adapter_free`, and `llama_adapter_lora_apply`.
+- **Verification:**
+  - Unit tested in [`tests/test_lora.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_lora.mojo), verifying synthetic adapter generation, Delta W numerical accuracy, and online weight mutation on loaded models.
+  - Verified C-ABI lifecycle in [`tests/test_c_abi.c`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_c_abi.c).
+  - Included in [`run-tests.sh`](file:///mnt/c/Documents/Mojo/llamojo/run-tests.sh).
+
+### Key Objectives Achieved
 1. **Adapter Loading**:
    - Parse `adapter_model.gguf` metadata and extract low-rank tensor pairs (`{tensor}.lora_a` and `{tensor}.lora_b`).
    - Extract adapter hyperparameters (rank $r$, scale $\alpha$).
 2. **Mathematical Operation**:
-   - In-place additive transformation on base weight matrices or fused runtime matmul:
-     $$W_{\text{effective}} = W_{\text{base}} + \frac{\alpha}{r} (A \cdot B)$$
+   - In-place additive transformation on base weight matrices:
+     $$W_{\text{effective}} = W_{\text{base}} + \frac{\alpha}{r} (B \cdot A)$$
 3. **Multi-Adapter Support**:
    - Allow dynamic scaling weights per adapter, enabling runtime enabling/disabling of multiple task-specific LoRAs.
 

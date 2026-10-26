@@ -192,4 +192,15 @@ from .llama import (
     llama_model_has_encoder,
     llama_model_has_decoder,
     llama_model_is_recurrent,
+    llama_adapter_lora_apply,
+)
+from .lora import (
+    llama_lora_adapter,
+    llama_lora_adapter_p,
+    llama_lora_adapter_init,
+    llama_lora_adapter_set,
+    llama_lora_adapter_free,
+    compute_lora_delta,
+    apply_lora_to_f32_tensor,
+    write_synthetic_lora_gguf,
 )
