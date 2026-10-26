@@ -1,5 +1,4 @@
-""" Fused Normalization, Residual Connections, and Rotary Positional Embeddings (RoPE).
-
+""" Fused Normalization, Residual Connections, and Rotary Positional Embeddings (RoPE).\n
 Consolidates and modernizes:
 - MojoLlama/src/mojollama/kernels/fused_kernels.mojo
 - MojoLlama/src/mojollama/mojo_engine/rope_kv_cache.mojo
@@ -13,7 +12,7 @@ Provides zero-allocation fused passes for:
 """
 
 from std.memory import Pointer
-from std.math import sqrt, exp, pow, cos, sin
+from std.math import sqrt, exp, pow, cos, sin, tanh
 from .isa import SIMD_WIDTH, F32xW
 
 comptime FloatPtr = Pointer[Float32, MutUntrackedOrigin]
@@ -97,7 +96,7 @@ def rms_norm(
         out_ptr[unsafe_offset=i] = x[unsafe_offset=i] * inv_rms * weight[unsafe_offset=i]
         i += 1
 
-# ─── Fused SwiGLU Activation (SiLU(gate) * up) ───────────────────────────────
+# ─── Fused SwiGLU / GELU Activations ─────────────────────────────────────────
 
 @always_inline
 def silu(x: Float32) -> Float32:
@@ -116,6 +115,111 @@ def fused_silu_mul(
         var g = gate[unsafe_offset=i]
         var u = up[unsafe_offset=i]
         out_ptr[unsafe_offset=i] = silu(g) * u
+
+@always_inline
+def gelu(x: Float32) -> Float32:
+    """ Approximate GELU: 0.5 * x * (1 + tanh(sqrt(2/pi) * x * (1 + 0.044715 * x^2)))."""
+    comptime SQRT_2_OVER_PI: Float32 = 0.7978845608
+    comptime GELU_COEF_A: Float32 = 0.044715
+    var inner = SQRT_2_OVER_PI * x * (Float32(1.0) + GELU_COEF_A * x * x)
+    return Float32(0.5) * x * (Float32(1.0) + tanh(inner))
+
+@always_inline
+def fused_gelu_mul(
+        gate: FloatPtr,
+        up: FloatPtr,
+        out_ptr: FloatPtr,
+        n: Int,
+    ):
+    """ Fused GELU gate activation and elementwise product: out[i] = gelu(gate[i]) * up[i]."""
+    for i in range(n):
+        var g = gate[unsafe_offset=i]
+        var u = up[unsafe_offset=i]
+        out_ptr[unsafe_offset=i] = gelu(g) * u
+
+@always_inline
+def rms_norm_per_head(
+        x: FloatPtr,
+        weight: FloatPtr,
+        n_heads: Int,
+        head_dim: Int,
+        eps: Float32 = 1e-6,
+    ):
+    """ In-place RMSNorm per head (used by Gemma 4 Q/K normalization).
+    x has shape [n_heads * head_dim].
+    weight has shape [head_dim].
+    """
+    for h in range(n_heads):
+        var h_off = h * head_dim
+        var ss: Float32 = 0.0
+        var i = 0
+        while i + SIMD_WIDTH <= head_dim:
+            var xv = x.unsafe_offset(h_off).unsafe_load[width=SIMD_WIDTH](i)
+            ss += (xv * xv).reduce_add()
+            i += SIMD_WIDTH
+        while i < head_dim:
+            var val = x[unsafe_offset=h_off + i]
+            ss += val * val
+            i += 1
+
+        var inv_rms = Float32(1.0) / sqrt(ss / Float32(head_dim) + eps)
+        var inv_v = F32xW(inv_rms)
+
+        i = 0
+        while i + SIMD_WIDTH <= head_dim:
+            var xv = x.unsafe_offset(h_off).unsafe_load[width=SIMD_WIDTH](i)
+            var wv = weight.unsafe_load[width=SIMD_WIDTH](i)
+            x.unsafe_offset(h_off).unsafe_store[width=SIMD_WIDTH](i, xv * inv_v * wv)
+            i += SIMD_WIDTH
+        while i < head_dim:
+            x[unsafe_offset=h_off + i] = x[unsafe_offset=h_off + i] * inv_rms * weight[unsafe_offset=i]
+            i += 1
+
+@always_inline
+def rms_norm_no_weight(
+        out_ptr: FloatPtr,
+        x: FloatPtr,
+        n: Int,
+        eps: Float32 = 1e-6,
+    ):
+    """ Unweighted RMSNorm (used by Gemma 4 V normalization: ggml_rms_norm)."""
+    var ss: Float32 = 0.0
+    var i = 0
+    while i + SIMD_WIDTH <= n:
+        var xv = x.unsafe_load[width=SIMD_WIDTH](i)
+        ss += (xv * xv).reduce_add()
+        i += SIMD_WIDTH
+    while i < n:
+        var val = x[unsafe_offset=i]
+        ss += val * val
+        i += 1
+
+    var inv_rms = Float32(1.0) / sqrt(ss / Float32(n) + eps)
+    var inv_v = F32xW(inv_rms)
+
+    i = 0
+    while i + SIMD_WIDTH <= n:
+        var xv = x.unsafe_load[width=SIMD_WIDTH](i)
+        out_ptr.unsafe_store[width=SIMD_WIDTH](i, xv * inv_v)
+        i += SIMD_WIDTH
+    while i < n:
+        out_ptr[unsafe_offset=i] = x[unsafe_offset=i] * inv_rms
+        i += 1
+
+@always_inline
+def apply_logit_softcapping(
+        logits: FloatPtr,
+        n_vocab: Int,
+        cap: Float32 = 30.0,
+    ):
+    """ Apply logit softcapping: logits[i] = cap * tanh(logits[i] / cap)."""
+    if cap <= 0.0:
+        return
+    var inv_cap = Float32(1.0) / cap
+    for i in range(n_vocab):
+        var v = logits[unsafe_offset=i]
+        logits[unsafe_offset=i] = cap * tanh(v * inv_cap)
+
 
 # ─── Rotary Positional Embedding (RoPE) ──────────────────────────────────────
 

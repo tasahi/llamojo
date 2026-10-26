@@ -10,6 +10,11 @@ from llamojo import (
     fused_rms_norm_residual,
     rms_norm,
     fused_silu_mul,
+    gelu,
+    fused_gelu_mul,
+    rms_norm_per_head,
+    rms_norm_no_weight,
+    apply_logit_softcapping,
     apply_rope_neox,
     k4_scale,
     quantize_row_q8_0,
@@ -71,6 +76,62 @@ def test_fused_norm_and_swiglu() raises:
     up.unsafe_free()
     out_swiglu.unsafe_free()
     print("  ✓ Fused RMSNorm & SwiGLU passed")
+
+    # Test GELU, GELU-GLU, Per-Head RMSNorm, Unweighted RMSNorm, and Softcapping
+    print("Testing GELU, Per-Head RMSNorm, and Logit Softcapping...")
+    var gate_gelu = unsafe_alloc[Float32](4)
+    var up_gelu = unsafe_alloc[Float32](4)
+    var out_gelu = unsafe_alloc[Float32](4)
+    gate_gelu[unsafe_offset=0] = 0.0 # gelu(0) = 0.0
+    gate_gelu[unsafe_offset=1] = 1.0 # gelu(1.0) approx 0.8413447
+    gate_gelu[unsafe_offset=2] = -1.0 # gelu(-1.0) approx -0.158655
+    gate_gelu[unsafe_offset=3] = 10.0 # gelu(10) approx 10.0
+    for i in range(4):
+        up_gelu[unsafe_offset=i] = 2.0
+    fused_gelu_mul(gate_gelu, up_gelu, out_gelu, 4)
+    assert_almost_equal(out_gelu[unsafe_offset=0], Float32(0.0), atol=1e-5)
+    assert_almost_equal(out_gelu[unsafe_offset=1], Float32(0.8413447 * 2.0), atol=1e-3)
+    assert_almost_equal(out_gelu[unsafe_offset=2], Float32(-0.158655 * 2.0), atol=1e-3)
+    assert_almost_equal(out_gelu[unsafe_offset=3], Float32(20.0), atol=1e-2)
+    gate_gelu.unsafe_free()
+    up_gelu.unsafe_free()
+    out_gelu.unsafe_free()
+
+    # Test per-head RMSNorm
+    var q_buf = unsafe_alloc[Float32](8) # 2 heads of dim 4
+    var w_head = unsafe_alloc[Float32](4)
+    for i in range(4):
+        w_head[unsafe_offset=i] = 1.0
+        q_buf[unsafe_offset=i] = 2.0     # Head 0: RMS = 2.0 -> normed = 1.0
+        q_buf[unsafe_offset=4 + i] = 4.0 # Head 1: RMS = 4.0 -> normed = 1.0
+    rms_norm_per_head(q_buf, w_head, n_heads=2, head_dim=4, eps=1e-6)
+    for i in range(8):
+        assert_almost_equal(q_buf[unsafe_offset=i], Float32(1.0), atol=1e-3)
+    q_buf.unsafe_free()
+    w_head.unsafe_free()
+
+    # Test unweighted RMSNorm
+    var v_buf = unsafe_alloc[Float32](4)
+    var v_out = unsafe_alloc[Float32](4)
+    for i in range(4):
+        v_buf[unsafe_offset=i] = 3.0
+    rms_norm_no_weight(v_out, v_buf, 4, eps=1e-6)
+    for i in range(4):
+        assert_almost_equal(v_out[unsafe_offset=i], Float32(1.0), atol=1e-3)
+    v_buf.unsafe_free()
+    v_out.unsafe_free()
+
+    # Test logit softcapping
+    var logits = unsafe_alloc[Float32](3)
+    logits[unsafe_offset=0] = 0.0   # 30 * tanh(0) = 0
+    logits[unsafe_offset=1] = 300.0 # 30 * tanh(10) approx 30.0
+    logits[unsafe_offset=2] = -300.0 # 30 * tanh(-10) approx -30.0
+    apply_logit_softcapping(logits, 3, cap=Float32(30.0))
+    assert_almost_equal(logits[unsafe_offset=0], Float32(0.0), atol=1e-4)
+    assert_almost_equal(logits[unsafe_offset=1], Float32(30.0), atol=1e-3)
+    assert_almost_equal(logits[unsafe_offset=2], Float32(-30.0), atol=1e-3)
+    logits.unsafe_free()
+    print("  ✓ GELU, Per-Head RMSNorm & Softcapping passed")
 
 def test_rope_rotation() raises:
     print("Testing apply_rope_neox in-place rotary embeddings...")
