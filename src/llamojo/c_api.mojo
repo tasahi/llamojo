@@ -71,6 +71,12 @@ from llamojo.lora import (
     llama_lora_adapter_set as _lora_adapter_set,
     llama_lora_adapter_free as _lora_adapter_free,
 )
+from llamojo.grammar import (
+    GbnfGrammar,
+    llama_grammar_p,
+    llama_grammar_init as _grammar_init,
+    llama_grammar_free as _grammar_free,
+)
 from llamojo.vocab import (
     llama_vocab,
     llama_vocab_p,
@@ -517,3 +523,23 @@ def llama_adapter_lora_apply(
 ) abi("C") -> Int32:
     var path_str = _c_str_to_string(path_lora)
     return _adapter_lora_apply(model, path_str, scale)
+
+# ─── GBNF Grammar Export (Phase 9) ───────────────────────────────────────────
+
+@export("llama_grammar_init")
+def llama_grammar_init(
+    grammar_str: Pointer[UInt8, MutUntrackedOrigin],
+) abi("C") -> llama_grammar_p:
+    var g_str = _c_str_to_string(grammar_str)
+    return _grammar_init(g_str)
+
+@export("llama_grammar_free")
+def llama_grammar_free(grammar: llama_grammar_p) abi("C"):
+    _grammar_free(grammar)
+
+@export("llama_sampler_init_grammar")
+def llama_sampler_init_grammar(
+    grammar_str: Pointer[UInt8, MutUntrackedOrigin],
+) abi("C") -> llama_sampler_p:
+    var g_str = _c_str_to_string(grammar_str)
+    return _sampler_init_grammar(g_str)

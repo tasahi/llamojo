@@ -77,6 +77,8 @@ struct llama_sampler(Movable):
     var rng_state: UInt64
     # Grammar pattern (GBNF literal prefix / rule filter)
     var grammar_pattern: String
+    var grammar_buffer: String
+    var vocab_tokens: List[String]
 
     def __init__(out self, sampler_type: Int32):
         self.sampler_type = sampler_type
@@ -92,6 +94,8 @@ struct llama_sampler(Movable):
         self.prev_tokens = List[llama_token]()
         self.rng_state = 1337
         self.grammar_pattern = ""
+        self.grammar_buffer = ""
+        self.vocab_tokens = List[String]()
 
 comptime llama_sampler_p = Pointer[llama_sampler, MutUntrackedOrigin]
 
@@ -233,13 +237,21 @@ def _apply_min_p(smpl: llama_sampler_p, cur_p: Pointer[llama_token_data_array, M
     cur_p[].size = count
 
 def _apply_grammar(smpl: llama_sampler_p, cur_p: Pointer[llama_token_data_array, MutUntrackedOrigin]):
-    """ GBNF Grammar filtering stub: when a grammar rule/pattern is active,
+    """ GBNF Grammar filtering: when a grammar rule/pattern is active,
     filter out candidate tokens that cannot legally extend the sequence.
     """
-    if smpl[].grammar_pattern.byte_length() == 0:
+    if smpl[].grammar_pattern.byte_length() == 0 or cur_p[].size <= 0:
         return
-    # Reserved for future token regex/parse table mask
-    return
+    if len(smpl[].vocab_tokens) == 0:
+        return
+
+    from .grammar import apply_grammar_bitmask
+    apply_grammar_bitmask(
+        cur_p,
+        smpl[].grammar_pattern,
+        smpl[].grammar_buffer,
+        smpl[].vocab_tokens,
+    )
 
 # ─── Public llama.h Sampler API ──────────────────────────────────────────────
 
@@ -319,11 +331,15 @@ def llama_sampler_init_dist(seed: UInt32) -> llama_sampler_p:
     p.unsafe_write(s^)
     return p
 
-def llama_sampler_init_grammar(grammar_str: String) -> llama_sampler_p:
+def llama_sampler_init_grammar(
+        grammar_str: String,
+        vocab_tokens: List[String] = List[String](),
+    ) -> llama_sampler_p:
     """ Initialize GBNF grammar parser filter sampler."""
     var p = unsafe_alloc[llama_sampler](1)
     var s = llama_sampler(SAMPLER_TYPE_GRAMMAR)
     s.grammar_pattern = grammar_str
+    s.vocab_tokens = vocab_tokens.copy()
     p.unsafe_write(s^)
     return p
 
@@ -336,6 +352,10 @@ def llama_sampler_accept(smpl: llama_sampler_p, token: llama_token):
             llama_sampler_accept(smpl[].chain_items[i], token)
     elif smpl[].sampler_type == SAMPLER_TYPE_PENALTIES:
         smpl[].prev_tokens.append(token)
+    elif smpl[].sampler_type == SAMPLER_TYPE_GRAMMAR:
+        var tok_id = Int(token)
+        if tok_id >= 0 and tok_id < len(smpl[].vocab_tokens):
+            smpl[].grammar_buffer += smpl[].vocab_tokens[tok_id]
 
 def llama_sampler_apply(smpl: llama_sampler_p, cur_p: Pointer[llama_token_data_array, MutUntrackedOrigin]):
     """Apply transformation of sampler stage to candidate array."""

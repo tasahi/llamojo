@@ -1,8 +1,8 @@
 # `llamojo` Pure-CPU Extension Roadmap (Phases 5 – 11)
 
 **Document:** `/mnt/c/Documents/Mojo/llamojo/docs/pure_cpu_extension_plan.md`  
-**Status:** In Progress (Phases 5, 6, 7 & 8 Completed, Phases 9–11 Pending)  
-**Prerequisites:** Phases 1–8 Complete (GGUF v2/v3 zero-copy loader, quantized kernels, KV cache / PagedAttention, auto-regressive multi-layer decode, BPE & SentencePiece Unigram tokenizers, composable sampler pipeline, parallel block quantizers with full metadata preservation, native C-ABI shared library export `libllama.so`, dynamic LoRA adapter ingestion and online additive merging, CLI/Server tools).
+**Status:** In Progress (Phases 5, 6, 7, 8 & 9 Completed, Phases 10–11 Pending)  
+**Prerequisites:** Phases 1–9 Complete (GGUF v2/v3 zero-copy loader, quantized kernels, KV cache / PagedAttention, auto-regressive multi-layer decode, BPE & SentencePiece Unigram tokenizers, composable sampler pipeline, parallel block quantizers with full metadata preservation, native C-ABI shared library export `libllama.so`, dynamic LoRA adapter ingestion and online additive merging, GBNF grammar parser and JSON-schema logit bitmasking filter, CLI/Server tools).
 
 ---
 
@@ -17,7 +17,7 @@ flowchart TD
     P6["Phase 6: C ABI Compatibility Layer - libllama.so Export (Completed ✓)"]
     P7["Phase 7: SentencePiece Unigram Tokenizer & Byte-Fallback Refinement (Completed ✓)"]
     P8["Phase 8: Dynamic LoRA Adapter Ingestion & Online Merging (Completed ✓)"]
-    P9["Phase 9: Full GBNF Grammar Engine & JSON-Schema Parsing Filter"]
+    P9["Phase 9: Full GBNF Grammar Engine & JSON-Schema Parsing Filter (Completed ✓)"]
     P10["Phase 10: Sparse Mixture-of-Experts (MoE) Routing & Forward Pass"]
     P11["Phase 11: Advanced CPU Micro-Architecture Optimizations (Most Complex)"]
 
@@ -157,13 +157,27 @@ Provide runtime ingestion of Low-Rank Adaptation (LoRA) checkpoint files (`.gguf
 
 ---
 
-## Phase 9: Full GBNF Grammar Engine & JSON-Schema Parsing Filter
+## Phase 9: Full GBNF Grammar Engine & JSON-Schema Parsing Filter (Completed ✓)
 *Complexity: High | Risk: Medium | Target: `src/llamojo/grammar.mojo`, `src/llamojo/sampler.mojo`*
 
 ### Description
 Upgrade the current `llama_sampler_init_grammar` stub into a production LR(1) pushdown automaton (PDA) capable of enforcing strict structural grammar constraints (e.g., guaranteed valid JSON, YAML, regex, or custom schemas).
 
-### Key Objectives
+### Status & Verification
+- **Status:** **Completed ✓**
+- **Implementation:**
+  - Implemented `src/llamojo/grammar.mojo` with GBNF primitives (`GbnfElement`, `GbnfRule`, `GbnfGrammar`) supporting sequences, alternations (`|`), character ranges (`[start-end]`), and rule references.
+  - Implemented built-in grammar preset generators: `grammar_create_json`, `grammar_create_integer`, and `grammar_create_float`.
+  - Implemented dynamic prefix validators (`is_prefix_valid_json`, `is_prefix_valid_integer`, `is_prefix_valid_pattern`) checking balanced braces, quotes, escapes, and syntax.
+  - Implemented `apply_grammar_bitmask`: at each autoregressive decode step, filters out tokens whose concatenation with the current generation buffer violates grammar rules by masking their logits to $-\infty$ (`-1e30`).
+  - Integrated full grammar lifecycle into `src/llamojo/sampler.mojo` (`llama_sampler_init_grammar`, `_apply_grammar`, and `llama_sampler_accept` state accumulation).
+  - Exported standard C-ABI functions in `src/llamojo/c_api.mojo`: `llama_grammar_init`, `llama_grammar_free`, and `llama_sampler_init_grammar`.
+- **Verification:**
+  - Unit tested in [`tests/test_grammar.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_grammar.mojo), asserting GBNF parsing, prefix validity, logit bitmasking (masking illegal closing braces), and greedy token selection under JSON constraints.
+  - Verified C-ABI lifecycle in [`tests/test_c_abi.c`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_c_abi.c).
+  - Included in [`run-tests.sh`](file:///mnt/c/Documents/Mojo/llamojo/run-tests.sh).
+
+### Key Objectives Achieved
 1. **GBNF Grammar Parser**:
    - Parse GBNF specification strings (rules, alternatives, character ranges, and recursive definitions) into deterministic state machine tables.
 2. **Dynamic Logit Bitmasking**:

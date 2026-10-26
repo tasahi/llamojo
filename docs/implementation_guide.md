@@ -145,6 +145,7 @@ In Mojo 1.1.0, sublibraries are imported without code changes or wrapper overhea
   - Top-K filtering (`llama_sampler_init_top_k`).
   - Softmax probability calculation and Top-P / Nucleus sampling (`llama_sampler_init_top_p`).
   - Min-P noise-threshold filtering (`llama_sampler_init_min_p`).
+  - GBNF Grammar bitmasking filter (`llama_sampler_init_grammar`, Phase 9).
   - Greedy argmax (`llama_sampler_init_greedy`) and PRNG categorical distribution sampling (`llama_sampler_init_dist`).
   - Context acceptance tracking (`llama_sampler_accept`) and memory teardown (`llama_sampler_free`).
 
@@ -163,7 +164,13 @@ In Mojo 1.1.0, sublibraries are imported without code changes or wrapper overhea
 - **Scaled Online Additive Merging**: Computes $\Delta W = \frac{\alpha}{r} \cdot \text{scale} \cdot (B \cdot A)$ and merges directly into live base model weights (`llama_adapter_lora_apply`).
 - **Public & C-ABI Interface**: `llama_lora_adapter_init`, `llama_lora_adapter_set`, `llama_lora_adapter_free`, and `llama_adapter_lora_apply`.
 
-### 4.14 CLI Utilities & HTTP Inference Server (`tools/`)
+### 4.14 GBNF Grammar Engine & Schema Parsing Filter (`src/llamojo/grammar.mojo`)
+- **GBNF Parsing & Rule Graphs**: Compiles formal GBNF specification strings into production rules, alternatives, character ranges, and recursive rule references.
+- **Built-in Schema Generators**: Provides pre-configured grammar generators for JSON structures (`grammar_create_json`), integer formats (`grammar_create_integer`), and floating point numbers (`grammar_create_float`).
+- **Dynamic Prefix Bitmasking**: Validates candidate token concatenations against current generation state (`is_prefix_valid_pattern`, `apply_grammar_bitmask`), eliminating invalid structural tokens with $-\infty$ logit penalties.
+- **C-ABI Export**: `llama_grammar_init`, `llama_grammar_free`, and `llama_sampler_init_grammar`.
+
+### 4.15 CLI Utilities & HTTP Inference Server (`tools/`)
 - [`tools/llama_cli.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_cli.mojo): Standalone interactive command-line generation tool.
 - [`tools/llama_bench.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_bench.mojo): Micro-benchmarking harness measuring prompt processing and generation throughput (tok/s).
 - [`tools/llama_quantize.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_quantize.mojo): CLI interface for model quantization.
@@ -183,6 +190,7 @@ All modules are verified via the automated test runner [`run-tests.sh`](file:///
 | [`tests/test_context_decode.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_context_decode.mojo) | KV Cache, PageTable allocation, sequence manipulation, `llama_batch`, multi-layer `llama_decode` forward pass | Passed |
 | [`tests/test_vocab_sampler.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_vocab_sampler.mojo) | GGUF vocabulary BPE & SentencePiece Unigram (Viterbi trellis) tokenization, detokenization, composable sampler pipeline (penalties, temp, top-k, top-p, greedy), block quantizers (Q4_0, Q8_0, Q4_K, Q6_K), and full metadata preservation serialization | Passed |
 | [`tests/test_lora.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_lora.mojo) | Synthetic LoRA adapter generation, GGUF adapter parsing, rank/alpha extraction, Delta W calculation ($B \cdot A$), and online weight merging into live models | Passed |
-| [`tests/test_c_abi.c`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_c_abi.c) | Direct dynamic linking of `build/libllama.so` with `gcc -lllama`, verifying C-ABI function signatures, raw opaque pointers, backend lifecycle, capabilities query, greedy sampler creation, and LoRA adapter C-ABI lifecycle | Passed |
+| [`tests/test_grammar.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_grammar.mojo) | GBNF specification parser, standard presets (JSON, Integer, Float), balanced prefix validation, sampler logit bitmasking, and state transitions | Passed |
+| [`tests/test_c_abi.c`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_c_abi.c) | Direct dynamic linking of `build/libllama.so` with `gcc -lllama`, verifying C-ABI function signatures, raw opaque pointers, backend lifecycle, capabilities query, greedy sampler creation, LoRA adapter lifecycle, and GBNF grammar C-ABI lifecycle | Passed |
 | `mojo build --emit shared-lib` | Clean native shared library generation ([`build/libllama.so`](file:///mnt/c/Documents/Mojo/llamojo/build/libllama.so) — 471 KB) | Passed (0 errors) |
 | `mojo precompile` | Clean binary package generation ([`build/llamojo.mojoc`](file:///mnt/c/Documents/Mojo/llamojo/build/llamojo.mojoc) — 394 KB) | Passed (0 errors) |

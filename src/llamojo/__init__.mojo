@@ -204,3 +204,19 @@ from .lora import (
     apply_lora_to_f32_tensor,
     write_synthetic_lora_gguf,
 )
+from .grammar import (
+    GbnfElement,
+    GbnfRule,
+    GbnfGrammar,
+    llama_grammar_p,
+    parse_gbnf,
+    grammar_create_json,
+    grammar_create_integer,
+    grammar_create_float,
+    is_prefix_valid_json,
+    is_prefix_valid_integer,
+    is_prefix_valid_pattern,
+    apply_grammar_bitmask,
+    llama_grammar_init,
+    llama_grammar_free,
+)
