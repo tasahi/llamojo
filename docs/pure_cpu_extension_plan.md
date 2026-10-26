@@ -1,8 +1,8 @@
 # `llamojo` Pure-CPU Extension Roadmap (Phases 5 – 11)
 
 **Document:** `/mnt/c/Documents/Mojo/llamojo/docs/pure_cpu_extension_plan.md`  
-**Status:** In Progress (Phase 5 Completed, Phases 6–11 Pending)  
-**Prerequisites:** Phases 1–5 Complete (GGUF v2/v3 zero-copy loader, quantized kernels, KV cache / PagedAttention, auto-regressive multi-layer decode, BPE tokenizer, composable sampler pipeline, parallel block quantizers with full metadata preservation, CLI/Server tools).
+**Status:** In Progress (Phases 5 & 6 Completed, Phases 7–11 Pending)  
+**Prerequisites:** Phases 1–6 Complete (GGUF v2/v3 zero-copy loader, quantized kernels, KV cache / PagedAttention, auto-regressive multi-layer decode, BPE tokenizer, composable sampler pipeline, parallel block quantizers with full metadata preservation, native C-ABI shared library export `libllama.so`, CLI/Server tools).
 
 ---
 
@@ -14,7 +14,7 @@ This document establishes the pure-CPU implementation roadmap continuing directl
 flowchart TD
     P4["Phase 4: Tokenizer, Sampler & Quantizer (Completed)"]
     P5["Phase 5: Full GGUF Metadata Mirroring in Quantizer (Completed ✓)"]
-    P6["Phase 6: C ABI Compatibility Layer (libllama.so Export)"]
+    P6["Phase 6: C ABI Compatibility Layer - libllama.so Export (Completed ✓)"]
     P7["Phase 7: SentencePiece Unigram Tokenizer & Byte-Fallback Refinement"]
     P8["Phase 8: Dynamic LoRA Adapter Ingestion & Online Merging"]
     P9["Phase 9: Full GBNF Grammar Engine & JSON-Schema Parsing Filter"]
@@ -61,13 +61,28 @@ In Phase 4, `llama_model_quantize` established streaming block-quantization for 
 
 ---
 
-## Phase 6: C Foreign Function Interface ABI Export (`libllama.so`)
-*Complexity: Low to Moderate | Risk: Low | Target: `src/llamojo/c_api.mojo`*
+## Phase 6: C Foreign Function Interface ABI Export (`libllama.so`) (Completed ✓)
+*Complexity: Low to Moderate | Risk: Low | Target: `src/llamojo/c_api.mojo`, `build/libllama.so`*
 
 ### Description
 Enable external non-Mojo binaries, Python bindings (`llama-cpp-python`), Rust crates, and C/C++ applications to consume `llamojo` as a binary drop-in replacement by exporting canonical C ABI function symbols matching `llama.h`.
 
-### Key Objectives
+### Status & Verification
+- **Status:** **Completed ✓**
+- **Implementation:** Created [`src/llamojo/c_api.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/c_api.mojo) providing native `@export` C-ABI functions with explicit `abi("C")` calling conventions:
+  - Backend & system lifecycle: `llama_backend_init`, `llama_backend_free`, `llama_numa_init`, `llama_time_us`, `llama_max_devices`, `llama_supports_mmap`, `llama_supports_mlock`, `llama_supports_gpu_offload`.
+  - Parameters: `llama_model_default_params`, `llama_context_default_params`, `llama_model_quantize_default_params`.
+  - Model & inspection: `llama_load_model_from_file`, `llama_model_load_from_file`, `llama_free_model`, `llama_model_free`, `llama_model_n_vocab`, `llama_model_n_embd`, `llama_model_n_layer`, `llama_model_n_head`, `llama_model_n_head_kv`, `llama_model_n_ctx_train`, `llama_model_n_params`, `llama_model_size`, `llama_model_desc`.
+  - Context & forward pass: `llama_init_from_model`, `llama_new_context_with_model`, `llama_free`, `llama_decode`, `llama_encode`, `llama_get_logits`, `llama_get_logits_ith`, `llama_get_embeddings`.
+  - KV cache: `llama_kv_cache_clear`, `llama_kv_cache_seq_rm`, `llama_kv_cache_seq_cp`, `llama_kv_cache_seq_keep`, `llama_kv_cache_seq_add`.
+  - Batch: `llama_batch_init`, `llama_batch_free`.
+  - Vocab & Tokenizer: `llama_model_get_vocab`, `llama_tokenize`, `llama_token_to_piece`, `llama_detokenize`, `llama_vocab_bos`, `llama_vocab_eos`, `llama_vocab_eot`, `llama_vocab_is_eog`, `llama_vocab_n_tokens`.
+  - Sampler: `llama_sampler_chain_default_params`, `llama_sampler_chain_init`, `llama_sampler_chain_add`, `llama_sampler_init_top_k`, `llama_sampler_init_top_p`, `llama_sampler_init_min_p`, `llama_sampler_init_temp`, `llama_sampler_init_penalties`, `llama_sampler_init_greedy`, `llama_sampler_init_dist`, `llama_sampler_accept`, `llama_sampler_apply`, `llama_sampler_sample`, `llama_sampler_free`.
+  - Quantizer: `llama_model_quantize`.
+- **Shared Library Binary:** Built [`build/libllama.so`](file:///mnt/c/Documents/Mojo/llamojo/build/libllama.so) (447 KB) via `mojo build --emit shared-lib`.
+- **Foreign Language Integration Verification:** Verified with a pure C test program ([`tests/test_c_abi.c`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_c_abi.c)) compiled with `gcc` and dynamically linked with `-lllama -Wl,-rpath,build`. Verified backend initialization, time queries, device capabilities, and greedy sampler creation over raw pointers. Included in [`run-tests.sh`](file:///mnt/c/Documents/Mojo/llamojo/run-tests.sh).
+
+### Key Objectives Achieved
 1. **Native `@export` Functions**:
    - Backend lifecycle: `llama_backend_init`, `llama_backend_free`, `llama_print_system_info`.
    - Model inspection: `llama_model_load_from_file`, `llama_model_free`, `llama_model_n_vocab`, `llama_model_n_embd`, `llama_model_n_layer`, `llama_model_n_head`.
@@ -178,7 +193,7 @@ Extract maximal floating-point and integer compute performance on modern multi-c
 | Phase | Milestone Name | Complexity | Primary Focus Area | Parity Target | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Phase 5** | GGUF Metadata Mirroring | Low | Quantizer (`quantize.mojo`) | Identical GGUF v3 output metadata | **Completed ✓** |
-| **Phase 6** | C ABI Export (`libllama.so`) | Low-Med | Interface (`c_api.mojo`) | Direct drop-in linkable C shared library | Pending |
+| **Phase 6** | C ABI Export (`libllama.so`) | Low-Med | Interface (`c_api.mojo`) | Direct drop-in linkable C shared library | **Completed ✓** |
 | **Phase 7** | SentencePiece Unigram Tokenizer | Moderate | Vocab (`vocab.mojo`) | Gemma / T5 tokenizer coverage | Pending |
 | **Phase 8** | Dynamic LoRA Adapters | Moderate | Inference (`llama.mojo`, `lora.mojo`) | Runtime task fine-tuning | Pending |
 | **Phase 9** | GBNF Grammar Engine | High | Sampling (`sampler.mojo`, `grammar.mojo`) | Guaranteed JSON / structured output | Pending |

@@ -152,7 +152,11 @@ In Mojo 1.1.0, sublibraries are imported without code changes or wrapper overhea
 - **Full GGUF Metadata Mirroring (Phase 5)**: Preserves all arbitrary key-value pairs (chat templates, tokenizer tokens and scores, architecture parameters) from input models, dynamically writes target `general.file_type = ftype`, and updates `general.quantization_version = 2`.
 - **`llama_model_quantize`**: Full streaming model converter reading source GGUF files and emitting quantized v3 files with 32-byte aligned metadata headers and aligned tensor payload buffers.
 
-### 4.12 CLI Utilities & HTTP Inference Server (`tools/`)
+### 4.12 C Foreign Function Interface ABI Export (`src/llamojo/c_api.mojo`)
+- **Direct Linkable C-ABI (`libllama.so`)**: Exposes native `@export` symbols with standard `abi("C")` calling conventions matching `llama.h` function signatures for zero-wrapper foreign language integration (C, C++, Rust, `llama-cpp-python`).
+- **Comprehensive API Surface**: Covers backend system lifecycle, model and context instantiation, batch execution, KV cache manipulation, BPE tokenization/detokenization, composable sampler pipeline stages, and quantization.
+
+### 4.13 CLI Utilities & HTTP Inference Server (`tools/`)
 - [`tools/llama_cli.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_cli.mojo): Standalone interactive command-line generation tool.
 - [`tools/llama_bench.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_bench.mojo): Micro-benchmarking harness measuring prompt processing and generation throughput (tok/s).
 - [`tools/llama_quantize.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_quantize.mojo): CLI interface for model quantization.
@@ -171,4 +175,6 @@ All modules are verified via the automated test runner [`run-tests.sh`](file:///
 | [`tests/test_kernels.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_kernels.mojo) | Fused RMSNorm+Res, SwiGLU, RoPE rotation, Q8_0 quant, `k4_scale`, Q4_K / MXFP4 dot, multi-matrix fusion ($n=3$) | Passed |
 | [`tests/test_context_decode.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_context_decode.mojo) | KV Cache, PageTable allocation, sequence manipulation, `llama_batch`, multi-layer `llama_decode` forward pass | Passed |
 | [`tests/test_vocab_sampler.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_vocab_sampler.mojo) | GGUF vocabulary BPE tokenization/detokenization, composable sampler pipeline (penalties, temp, top-k, top-p, greedy), block quantizers (Q4_0, Q8_0, Q4_K, Q6_K), and full metadata preservation serialization | Passed |
+| [`tests/test_c_abi.c`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_c_abi.c) | Direct dynamic linking of `build/libllama.so` with `gcc -lllama`, verifying C-ABI function signatures, raw opaque pointers, backend lifecycle, capabilities query, and greedy sampler creation | Passed |
+| `mojo build --emit shared-lib` | Clean native shared library generation ([`build/libllama.so`](file:///mnt/c/Documents/Mojo/llamojo/build/libllama.so) — 447 KB) | Passed (0 errors) |
 | `mojo precompile` | Clean binary package generation ([`build/llamojo.mojoc`](file:///mnt/c/Documents/Mojo/llamojo/build/llamojo.mojoc) — 371 KB) | Passed (0 errors) |

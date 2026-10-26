@@ -16,7 +16,7 @@ TESTS=(
 )
 
 echo "============================================================"
-echo "Running llamojo Test Suite (Phases 1, 2, 3 & 4)"
+echo "Running llamojo Test Suite (Phases 1 - 6)"
 echo "============================================================"
 
 for test in "${TESTS[@]}"; do
@@ -24,6 +24,14 @@ for test in "${TESTS[@]}"; do
     echo ">>> Running $test..."
     "$MOJO_BIN" $INCLUDE_FLAGS "$test"
 done
+
+if command -v gcc >/dev/null 2>&1 && [ -f "build/libllama.so" ]; then
+    echo ""
+    echo ">>> Running tests/test_c_abi.c against build/libllama.so..."
+    gcc tests/test_c_abi.c -Lbuild -lllama -Wl,-rpath,"$SCRIPT_DIR/build" -o tests/test_c_abi_bin
+    ./tests/test_c_abi_bin
+    rm -f tests/test_c_abi_bin
+fi
 
 echo ""
 echo "============================================================"
