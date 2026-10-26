@@ -1,5 +1,4 @@
-"""Public llama.h-compatible API for llamojo.
-
+"""Public llama.h-compatible API for llamojo.\n
 Phases 1-3 complete implementation:
   - llama_backend_init / llama_backend_free / llama_print_system_info
   - llama_model_default_params / llama_context_default_params / llama_model_quantize_default_params
@@ -89,8 +88,14 @@ struct llama_model(Movable):
     var output_weight_type: UInt32
     var layers: List[LayerWeights]
 
-    def __init__(
-            out self,
+    # Gemma 4 global per-layer embedding tensors
+    var per_layer_token_embd: BytePtr
+    var per_layer_token_embd_type: UInt32
+    var per_layer_model_proj: BytePtr
+    var per_layer_model_proj_type: UInt32
+    var per_layer_proj_norm: FloatPtr
+
+    def __init__( out self,
             var gguf: GGUFContext,
             var config: ModelConfig,
             params: llama_model_params,
@@ -144,6 +149,25 @@ struct llama_model(Movable):
             self.output_weight = self.token_embd
             self.output_weight_type = self.token_embd_type
 
+        # Bind Gemma 4 per-layer embedding tensors
+        self.per_layer_token_embd = gguf.get_tensor_ptr("per_layer_token_embd.weight")
+        self.per_layer_token_embd_type = GGMLType.F32
+        if gguf.has_tensor("per_layer_token_embd.weight"):
+            try:
+                self.per_layer_token_embd_type = gguf.get_tensor("per_layer_token_embd.weight").dtype
+            except:
+                pass
+
+        self.per_layer_model_proj = gguf.get_tensor_ptr("per_layer_model_proj.weight")
+        self.per_layer_model_proj_type = GGMLType.F32
+        if gguf.has_tensor("per_layer_model_proj.weight"):
+            try:
+                self.per_layer_model_proj_type = gguf.get_tensor("per_layer_model_proj.weight").dtype
+            except:
+                pass
+
+        self.per_layer_proj_norm = gguf.get_tensor_ptr("per_layer_proj_norm.weight").unsafe_bitcast[Float32]()
+
         # Populate per-layer weight descriptors
         self.layers = List[LayerWeights]()
         for l in range(config.n_layers):
@@ -158,6 +182,32 @@ struct llama_model(Movable):
             lw.w_gate = gguf.get_tensor_ptr(pfx + "ffn_gate.weight")
             lw.w_up = gguf.get_tensor_ptr(pfx + "ffn_up.weight")
             lw.w_down = gguf.get_tensor_ptr(pfx + "ffn_down.weight")
+
+            # Gemma 4 per-layer norms, scales, and PLE projections
+            lw.attn_q_norm = gguf.get_tensor_ptr(pfx + "attn_q_norm.weight").unsafe_bitcast[Float32]()
+            lw.attn_k_norm = gguf.get_tensor_ptr(pfx + "attn_k_norm.weight").unsafe_bitcast[Float32]()
+            lw.post_attention_norm = gguf.get_tensor_ptr(pfx + "post_attention_norm.weight").unsafe_bitcast[Float32]()
+            lw.post_ffw_norm = gguf.get_tensor_ptr(pfx + "post_ffw_norm.weight").unsafe_bitcast[Float32]()
+            lw.inp_gate = gguf.get_tensor_ptr(pfx + "inp_gate.weight")
+            lw.proj = gguf.get_tensor_ptr(pfx + "proj.weight")
+            lw.post_norm = gguf.get_tensor_ptr(pfx + "post_norm.weight").unsafe_bitcast[Float32]()
+
+            var scale_ptr = gguf.get_tensor_ptr(pfx + "layer_output_scale.weight")
+            if Int(scale_ptr) != 0:
+                lw.layer_output_scale = scale_ptr.unsafe_bitcast[Float32]()[unsafe_offset=0]
+            else:
+                lw.layer_output_scale = 1.0
+
+            if gguf.has_tensor(pfx + "inp_gate.weight"):
+                try:
+                    lw.dtype_inp_gate = gguf.get_tensor(pfx + "inp_gate.weight").dtype
+                except:
+                    pass
+            if gguf.has_tensor(pfx + "proj.weight"):
+                try:
+                    lw.dtype_proj = gguf.get_tensor(pfx + "proj.weight").dtype
+                except:
+                    pass
 
             # MoE Router and Expert Weight Ingestion
             var router_ptr = gguf.get_tensor_ptr(pfx + "ffn_gate_inp.weight")
@@ -446,10 +496,10 @@ def llama_free_model(model: llama_model_p):
 # ─── Context Lifecycle API ───────────────────────────────────────────────────
 
 def llama_init_from_model(
-    model: llama_model_p,
-    params: llama_context_params,
-) -> llama_context_p:
-    """Initialize an inference execution context for `model`."""
+        model: llama_model_p,
+        params: llama_context_params,
+    ) -> llama_context_p:
+    """ Initialize an inference execution context for `model`."""
     if Int(model) == 0:
         return null_ptr[llama_context]()
     var ctx_ptr = unsafe_alloc[llama_context](1)
@@ -505,7 +555,7 @@ def llama_batch_init(n_tokens: Int32, embd: Int32, n_seq_max: Int32) -> llama_ba
     )
 
 def llama_batch_get_one(tokens: Pointer[llama_token, MutUntrackedOrigin], n_tokens: Int32) -> llama_batch:
-    """Create a view `llama_batch` over contiguous tokens with auto-incrementing positions."""
+    """ Create a view `llama_batch` over contiguous tokens with auto-incrementing positions."""
     var batch = llama_batch_init(n_tokens, embd=0, n_seq_max=1)
     for i in range(Int(n_tokens)):
         batch.token[unsafe_offset=i] = tokens[unsafe_offset=i]
@@ -514,7 +564,7 @@ def llama_batch_get_one(tokens: Pointer[llama_token, MutUntrackedOrigin], n_toke
     return batch^
 
 def llama_batch_free(mut batch: llama_batch):
-    """Release heap arrays allocated by `llama_batch_init`."""
+    """ Release heap arrays allocated by `llama_batch_init`."""
     if Int(batch.token) != 0:
         batch.token.unsafe_free()
     if Int(batch.pos) != 0:
@@ -536,7 +586,7 @@ def llama_batch_free(mut batch: llama_batch):
 # ─── Inference: llama_decode Engine ──────────────────────────────────────────
 
 def llama_decode(ctx: llama_context_p, batch: llama_batch) -> Int32:
-    """Run full autoregressive transformer forward pass on tokens in `batch`."""
+    """ Run full autoregressive transformer forward pass on tokens in `batch`."""
     if Int(ctx) == 0 or batch.n_tokens <= 0:
         return -1
 

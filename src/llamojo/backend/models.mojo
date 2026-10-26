@@ -69,6 +69,18 @@ struct LayerWeights(ImplicitlyCopyable, Copyable, Movable):
     var dtype_up: UInt32
     var dtype_down: UInt32
 
+    # Gemma 4 specific layer weights & norms
+    var attn_q_norm: FloatPtr
+    var attn_k_norm: FloatPtr
+    var post_attention_norm: FloatPtr
+    var post_ffw_norm: FloatPtr
+    var inp_gate: BytePtr
+    var proj: BytePtr
+    var post_norm: FloatPtr
+    var layer_output_scale: Float32
+    var dtype_inp_gate: UInt32
+    var dtype_proj: UInt32
+
     def __init__(out self):
         var z: Int = 0
         self.attn_norm = FloatPtr(unsafe_from_address=z)
@@ -95,6 +107,17 @@ struct LayerWeights(ImplicitlyCopyable, Copyable, Movable):
         self.dtype_gate = GGMLType.F32
         self.dtype_up = GGMLType.F32
         self.dtype_down = GGMLType.F32
+
+        self.attn_q_norm = FloatPtr(unsafe_from_address=z)
+        self.attn_k_norm = FloatPtr(unsafe_from_address=z)
+        self.post_attention_norm = FloatPtr(unsafe_from_address=z)
+        self.post_ffw_norm = FloatPtr(unsafe_from_address=z)
+        self.inp_gate = BytePtr(unsafe_from_address=z)
+        self.proj = BytePtr(unsafe_from_address=z)
+        self.post_norm = FloatPtr(unsafe_from_address=z)
+        self.layer_output_scale = 1.0
+        self.dtype_inp_gate = GGMLType.F32
+        self.dtype_proj = GGMLType.F32
 
 # ─── Multi-Architecture Transformer Forward Worker ────────────────────────────
 
