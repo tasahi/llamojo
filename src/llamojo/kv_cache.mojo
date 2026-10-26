@@ -136,16 +136,21 @@ struct LlamaKVCache(Movable):
     var has_paged: Bool
     var allocated: Bool
 
+    # Gemma 4 hybrid & shared KV parameters
+    var n_layer_kv: Int         # Number of layers that physically store KV (e.g. 15 for Gemma 4)
+    var shared_kv_layers: Int   # Number of shared layers (e.g. 20 for Gemma 4)
+
     def __init__(
-        out self,
-        max_ctx: Int,
-        n_layers: Int,
-        n_kv_heads: Int,
-        head_dim: Int,
-        type_k: UInt32 = GGMLType.F16,
-        type_v: UInt32 = GGMLType.F16,
-        enable_paged: Bool = False,
-    ):
+            out self,
+            max_ctx: Int,
+            n_layers: Int,
+            n_kv_heads: Int,
+            head_dim: Int,
+            type_k: UInt32 = GGMLType.F16,
+            type_v: UInt32 = GGMLType.F16,
+            enable_paged: Bool = False,
+            shared_kv_layers: Int = 0,
+        ):
         self.max_ctx = max(1, max_ctx)
         self.n_layers = max(1, n_layers)
         self.n_kv_heads = max(1, n_kv_heads)
@@ -154,16 +159,18 @@ struct LlamaKVCache(Movable):
         self.type_k = type_k
         self.type_v = type_v
         self.has_paged = enable_paged
+        self.shared_kv_layers = shared_kv_layers
+        self.n_layer_kv = self.n_layers - shared_kv_layers if (shared_kv_layers > 0 and shared_kv_layers < self.n_layers) else self.n_layers
 
         var total_tokens = self.max_ctx
-        var total_layer_tokens = self.n_layers * total_tokens
+        var total_layer_tokens = self.n_layer_kv * total_tokens
 
         # Allocate per-token metadata cells
         self.cells = unsafe_alloc[LlamaKVCell](self.max_ctx)
         for i in range(self.max_ctx):
             self.cells[unsafe_offset=i] = LlamaKVCell()
 
-        # Allocate KV buffers based on quantization type
+        # Allocate KV buffers based on quantization type (only for n_layer_kv active storage layers)
         var total_floats = total_layer_tokens * self.kv_dim
         self.k_f32 = unsafe_alloc[Float32](total_floats)
         self.v_f32 = unsafe_alloc[Float32](total_floats)
@@ -184,22 +191,39 @@ struct LlamaKVCache(Movable):
         if enable_paged:
             var page_size = 16
             var max_pages = (self.max_ctx + page_size - 1) // page_size
-            self.page_table = PageTable(max_pages, page_size, self.n_layers, self.n_kv_heads, self.head_dim)
+            self.page_table = PageTable(max_pages, page_size, self.n_layer_kv, self.n_kv_heads, self.head_dim)
         else:
             self.page_table = PageTable(1, 16, 1, 1, 1)
 
         self.allocated = True
 
     @always_inline
-    def get_k_ptr(self, layer: Int, slot: Int) -> FloatPtr:
-        """ Return pointer to K cache for (layer, slot)."""
-        var offset = layer * self.max_ctx * self.kv_dim + slot * self.kv_dim
+    def get_reused_layer(self, layer: Int, is_swa: Bool) -> Int:
+        """ Map a layer index to its backing physical KV storage layer.
+        For Gemma 4: layers 0..14 store their own KV.
+        Layers >= 15 reuse layer 13 (if SWA) or 14 (if global attention).
+        """
+        if self.shared_kv_layers <= 0 or layer < self.n_layer_kv:
+            return layer
+        return self.n_layer_kv - (2 if is_swa else 1)
+
+    @always_inline
+    def has_own_kv(self, layer: Int) -> Bool:
+        """ Returns true if this layer computes and stores its own KV projection."""
+        return self.shared_kv_layers <= 0 or layer < self.n_layer_kv
+
+    @always_inline
+    def get_k_ptr(self, layer: Int, slot: Int, is_swa: Bool = False) -> FloatPtr:
+        """ Return pointer to K cache for (layer, slot), taking layer reuse into account."""
+        var phys_layer = self.get_reused_layer(layer, is_swa)
+        var offset = phys_layer * self.max_ctx * self.kv_dim + slot * self.kv_dim
         return self.k_f32.unsafe_offset(offset)
 
     @always_inline
-    def get_v_ptr(self, layer: Int, slot: Int) -> FloatPtr:
-        """ Return pointer to V cache for (layer, slot)."""
-        var offset = layer * self.max_ctx * self.kv_dim + slot * self.kv_dim
+    def get_v_ptr(self, layer: Int, slot: Int, is_swa: Bool = False) -> FloatPtr:
+        """ Return pointer to V cache for (layer, slot), taking layer reuse into account."""
+        var phys_layer = self.get_reused_layer(layer, is_swa)
+        var offset = phys_layer * self.max_ctx * self.kv_dim + slot * self.kv_dim
         return self.v_f32.unsafe_offset(offset)
 
     def write_kv(self, layer: Int, slot: Int, k_in: FloatPtr, v_in: FloatPtr, pos: llama_pos, seq_id: llama_seq_id):

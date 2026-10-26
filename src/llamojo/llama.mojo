@@ -266,7 +266,7 @@ struct llama_context(Movable):
         self.vocab_size = cfg.vocab_size
         self.n_tokens = 0
 
-        # Initialize KV Cache
+        # Initialize KV Cache (with shared KV layers support for architectures like Gemma 4)
         self.kv_cache = LlamaKVCache(
             max_ctx=self.max_ctx,
             n_layers=cfg.n_layers,
@@ -275,6 +275,7 @@ struct llama_context(Movable):
             type_k=params.type_k,
             type_v=params.type_v,
             enable_paged=False,
+            shared_kv_layers=cfg.shared_kv_layers,
         )
 
         # Initialize Persistent Spin-Barrier Worker Pool

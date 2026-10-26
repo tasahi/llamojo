@@ -92,6 +92,34 @@ def test_kv_cache_seq_ops() raises:
     kv.deinit_storage()
     print("  ✓ LlamaKVCache seq operations passed")
 
+    # Test Gemma 4 shared KV layer reuse and SWA sliding window attention
+    print("Testing Gemma 4 Shared KV Cache layer mapping & SWA attention...")
+    var kv_gemma = LlamaKVCache(
+        max_ctx=32,
+        n_layers=35,
+        n_kv_heads=1,
+        head_dim=256,
+        type_k=GGMLType.F16,
+        type_v=GGMLType.F16,
+        shared_kv_layers=20,
+    )
+    assert_equal(kv_gemma.n_layer_kv, 15)
+    assert_true(kv_gemma.has_own_kv(0))
+    assert_true(kv_gemma.has_own_kv(14))
+    assert_true(not kv_gemma.has_own_kv(15))
+    assert_true(not kv_gemma.has_own_kv(34))
+
+    # Test reuse mapping
+    # SWA layers >= 15 reuse layer 13
+    assert_equal(kv_gemma.get_reused_layer(15, is_swa=True), 13)
+    assert_equal(kv_gemma.get_reused_layer(20, is_swa=True), 13)
+    # Global layers >= 15 reuse layer 14
+    assert_equal(kv_gemma.get_reused_layer(19, is_swa=False), 14)
+    assert_equal(kv_gemma.get_reused_layer(34, is_swa=False), 14)
+
+    kv_gemma.deinit_storage()
+    print("  ✓ Gemma 4 Shared KV Cache mapping passed")
+
 def test_batch_lifecycle() raises:
     print("Testing llama_batch allocation, views, and free...")
     var batch = llama_batch_init(n_tokens=4, embd=0, n_seq_max=1)
