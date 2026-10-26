@@ -1,8 +1,8 @@
 # `llamojo` Pure-CPU Extension Roadmap (Phases 5 – 11)
 
 **Document:** `/mnt/c/Documents/Mojo/llamojo/docs/pure_cpu_extension_plan.md`  
-**Status:** In Progress (Phases 5, 6, 7, 8 & 9 Completed, Phases 10–11 Pending)  
-**Prerequisites:** Phases 1–9 Complete (GGUF v2/v3 zero-copy loader, quantized kernels, KV cache / PagedAttention, auto-regressive multi-layer decode, BPE & SentencePiece Unigram tokenizers, composable sampler pipeline, parallel block quantizers with full metadata preservation, native C-ABI shared library export `libllama.so`, dynamic LoRA adapter ingestion and online additive merging, GBNF grammar parser and JSON-schema logit bitmasking filter, CLI/Server tools).
+**Status:** In Progress (Phases 5, 6, 7, 8, 9 & 10 Completed, Phase 11 Pending)  
+**Prerequisites:** Phases 1–10 Complete (GGUF v2/v3 zero-copy loader, quantized kernels, KV cache / PagedAttention, auto-regressive multi-layer decode, BPE & SentencePiece Unigram tokenizers, composable sampler pipeline, parallel block quantizers with full metadata preservation, native C-ABI shared library export `libllama.so`, dynamic LoRA adapter ingestion and online additive merging, GBNF grammar parser and JSON-schema logit bitmasking filter, sparse Mixture-of-Experts routing & selective expert execution, CLI/Server tools).
 
 ---
 
@@ -18,7 +18,7 @@ flowchart TD
     P7["Phase 7: SentencePiece Unigram Tokenizer & Byte-Fallback Refinement (Completed ✓)"]
     P8["Phase 8: Dynamic LoRA Adapter Ingestion & Online Merging (Completed ✓)"]
     P9["Phase 9: Full GBNF Grammar Engine & JSON-Schema Parsing Filter (Completed ✓)"]
-    P10["Phase 10: Sparse Mixture-of-Experts (MoE) Routing & Forward Pass"]
+    P10["Phase 10: Sparse Mixture-of-Experts (MoE) Routing & Forward Pass (Completed ✓)"]
     P11["Phase 11: Advanced CPU Micro-Architecture Optimizations (Most Complex)"]
 
     P4 --> P5
@@ -190,13 +190,24 @@ Upgrade the current `llama_sampler_init_grammar` stub into a production LR(1) pu
 
 ---
 
-## Phase 10: Sparse Mixture-of-Experts (MoE) Routing & Forward Pass
+## Phase 10: Sparse Mixture-of-Experts (MoE) Routing & Forward Pass (Completed ✓)
 *Complexity: High | Risk: Medium | Target: `src/llamojo/llama.mojo`, `src/llamojo/backend/moe.mojo`*
 
 ### Description
 Wire sparse routing and dynamic expert dispatch into `llama_decode` to enable high-throughput CPU inference for MoE models (Mixtral 8x7B, Qwen1.5-MoE, DeepSeek-V2/V3).
 
-### Key Objectives
+### Status & Verification
+- **Status:** **Completed ✓**
+- **Implementation:**
+  - Created `src/llamojo/backend/moe.mojo` defining `MoEExpertWeights`, `MoELayerWeights`, and `SelectedExpert`.
+  - Implemented `route_experts`: computes linear projection of normalized hidden states against `w_router` (`ffn_gate_inp.weight`), applies numerically stable softmax, selects top-$k$ active experts (e.g. $k=2$), and renormalizes weights to sum to 1.0.
+  - Implemented `forward_moe_ffn`: schedules selective FFN execution over only the active experts, evaluating fused Gate/Up SwiGLU (`matmul_quant_fused[2]`) and Down projection, scaling expert outputs by gating weights and accumulating directly into the residual stream.
+  - Updated `LayerWeights` and `llama_decode` in `src/llamojo/backend/models.mojo` and `src/llamojo/llama.mojo` to automatically detect and ingest MoE router weights and per-expert tensor arrays (`ffn_gate.{e}.weight`, `ffn_up.{e}.weight`, `ffn_down.{e}.weight`).
+- **Verification:**
+  - Unit tested in [`tests/test_moe.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_moe.mojo), validating router dot products, softmax normalization, top-k selection ordering, and a full autoregressive transformer decode step with active MoE routing.
+  - Tested across all test suites via [`run-tests.sh`](file:///mnt/c/Documents/Mojo/llamojo/run-tests.sh).
+
+### Key Objectives Achieved
 1. **Router Gating**:
    - Implement `ffn_gate_inp.weight` linear projection over hidden states to compute expert logits.
    - Compute softmax over routing logits and select Top-$k$ expert indices per token (e.g., $k=2$ for Mixtral).

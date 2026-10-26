@@ -220,3 +220,10 @@ from .grammar import (
     llama_grammar_init,
     llama_grammar_free,
 )
+from .backend.moe import (
+    MoEExpertWeights,
+    MoELayerWeights,
+    SelectedExpert,
+    route_experts,
+    forward_moe_ffn,
+)

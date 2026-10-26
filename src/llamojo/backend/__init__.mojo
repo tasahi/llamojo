@@ -74,4 +74,11 @@ from .models import (
     LayerWeights,
     forward_layer_dense,
 )
+from .moe import (
+    MoEExpertWeights,
+    MoELayerWeights,
+    SelectedExpert,
+    route_experts,
+    forward_moe_ffn,
+)
 

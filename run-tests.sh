@@ -15,6 +15,7 @@ TESTS=(
     "tests/test_vocab_sampler.mojo"
     "tests/test_lora.mojo"
     "tests/test_grammar.mojo"
+    "tests/test_moe.mojo"
 )
 
 echo "============================================================"

@@ -126,7 +126,7 @@ In Mojo 1.1.0, sublibraries are imported without code changes or wrapper overhea
   - NeoX / interleaved rotary positional embeddings (RoPE).
   - PagedAttention and Grouped-Query Attention (`gqa_decode`).
   - Output projection matmul and residual addition.
-  - FFN pre-norm followed by fused Gate/Up SwiGLU projection.
+  - FFN pre-norm followed by fused Gate/Up SwiGLU projection for dense models, or sparse Mixture-of-Experts routing and selective execution (`forward_moe_ffn`, Phase 10).
   - Down projection matmul and final residual accumulation.
   - Output norm and final vocabulary projection to logits buffer (`llama_get_logits`, `llama_get_logits_ith`).
 
@@ -170,7 +170,12 @@ In Mojo 1.1.0, sublibraries are imported without code changes or wrapper overhea
 - **Dynamic Prefix Bitmasking**: Validates candidate token concatenations against current generation state (`is_prefix_valid_pattern`, `apply_grammar_bitmask`), eliminating invalid structural tokens with $-\infty$ logit penalties.
 - **C-ABI Export**: `llama_grammar_init`, `llama_grammar_free`, and `llama_sampler_init_grammar`.
 
-### 4.15 CLI Utilities & HTTP Inference Server (`tools/`)
+### 4.15 Sparse Mixture-of-Experts Engine (`src/llamojo/backend/moe.mojo`)
+- **Router Gating**: Linear projection of hidden states against `w_router` (`ffn_gate_inp.weight`) with softmax normalization.
+- **Top-K Dispatch**: Selects top-$k$ active experts per token (e.g. $k=2$) and renormalizes routing weights.
+- **Selective Execution**: Evaluates only the active expert FFN branches via multi-matrix fused SwiGLU (`matmul_quant_fused[2]`) and down-projection, accumulating weighted outputs into the residual stream.
+
+### 4.16 CLI Utilities & HTTP Inference Server (`tools/`)
 - [`tools/llama_cli.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_cli.mojo): Standalone interactive command-line generation tool.
 - [`tools/llama_bench.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_bench.mojo): Micro-benchmarking harness measuring prompt processing and generation throughput (tok/s).
 - [`tools/llama_quantize.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_quantize.mojo): CLI interface for model quantization.
@@ -191,6 +196,7 @@ All modules are verified via the automated test runner [`run-tests.sh`](file:///
 | [`tests/test_vocab_sampler.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_vocab_sampler.mojo) | GGUF vocabulary BPE & SentencePiece Unigram (Viterbi trellis) tokenization, detokenization, composable sampler pipeline (penalties, temp, top-k, top-p, greedy), block quantizers (Q4_0, Q8_0, Q4_K, Q6_K), and full metadata preservation serialization | Passed |
 | [`tests/test_lora.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_lora.mojo) | Synthetic LoRA adapter generation, GGUF adapter parsing, rank/alpha extraction, Delta W calculation ($B \cdot A$), and online weight merging into live models | Passed |
 | [`tests/test_grammar.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_grammar.mojo) | GBNF specification parser, standard presets (JSON, Integer, Float), balanced prefix validation, sampler logit bitmasking, and state transitions | Passed |
+| [`tests/test_moe.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_moe.mojo) | Sparse Mixture-of-Experts routing dot products, softmax normalization, top-k selection ordering, and end-to-end MoE decode forward pass | Passed |
 | [`tests/test_c_abi.c`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_c_abi.c) | Direct dynamic linking of `build/libllama.so` with `gcc -lllama`, verifying C-ABI function signatures, raw opaque pointers, backend lifecycle, capabilities query, greedy sampler creation, LoRA adapter lifecycle, and GBNF grammar C-ABI lifecycle | Passed |
 | `mojo build --emit shared-lib` | Clean native shared library generation ([`build/libllama.so`](file:///mnt/c/Documents/Mojo/llamojo/build/libllama.so) — 471 KB) | Passed (0 errors) |
 | `mojo precompile` | Clean binary package generation ([`build/llamojo.mojoc`](file:///mnt/c/Documents/Mojo/llamojo/build/llamojo.mojoc) — 394 KB) | Passed (0 errors) |

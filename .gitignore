@@ -1,2 +1,4 @@
-build/llamojo.mojoc
+build/
 vendor/MojoLlama
+build/**
+build/libllama.so

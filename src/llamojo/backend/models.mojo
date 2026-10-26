@@ -37,6 +37,7 @@ from .kernels_quant import (
     matmul_quant_fused,
 )
 from .kernels_attn import gqa_decode
+from .moe import MoELayerWeights, MoEExpertWeights, forward_moe_ffn
 
 # ─── Model Weight Descriptors ────────────────────────────────────────────────
 
@@ -52,6 +53,12 @@ struct LayerWeights(ImplicitlyCopyable, Copyable, Movable):
     var w_up: BytePtr
     var w_down: BytePtr
     var w_router: FloatPtr # For MoE models
+    var is_moe: Bool
+    var n_experts: Int
+    var n_experts_used: Int
+    var exp_gates_ptr: Pointer[BytePtr, MutUntrackedOrigin]
+    var exp_ups_ptr: Pointer[BytePtr, MutUntrackedOrigin]
+    var exp_downs_ptr: Pointer[BytePtr, MutUntrackedOrigin]
     var dtype: UInt32
 
     def __init__(out self):
@@ -66,6 +73,12 @@ struct LayerWeights(ImplicitlyCopyable, Copyable, Movable):
         self.w_up = BytePtr(unsafe_from_address=z)
         self.w_down = BytePtr(unsafe_from_address=z)
         self.w_router = FloatPtr(unsafe_from_address=z)
+        self.is_moe = False
+        self.n_experts = 0
+        self.n_experts_used = 0
+        self.exp_gates_ptr = Pointer[BytePtr, MutUntrackedOrigin](unsafe_from_address=z)
+        self.exp_ups_ptr = Pointer[BytePtr, MutUntrackedOrigin](unsafe_from_address=z)
+        self.exp_downs_ptr = Pointer[BytePtr, MutUntrackedOrigin](unsafe_from_address=z)
         self.dtype = GGMLType.F32
 
 # ─── Multi-Architecture Transformer Forward Worker ────────────────────────────
@@ -197,8 +210,17 @@ def forward_layer_dense(
     else:
         unsafe_memcpy(dest=xbp, src=x, count=dim)
 
-    # 8. FFN SwiGLU: compute gate (hb) and up (hb2) projections
-    if Int(lw.w_gate) != 0 and Int(lw.w_up) != 0:
+    # 8. FFN SwiGLU / MoE execution
+    if lw.is_moe and lw.n_experts > 0 and Int(lw.w_router) != 0:
+        var moe = MoELayerWeights(lw.n_experts, lw.n_experts_used)
+        moe.w_router = lw.w_router
+        for e in range(lw.n_experts):
+            var wg = lw.exp_gates_ptr[unsafe_offset=e] if Int(lw.exp_gates_ptr) != 0 else lw.w_gate
+            var wu = lw.exp_ups_ptr[unsafe_offset=e] if Int(lw.exp_ups_ptr) != 0 else lw.w_up
+            var wd = lw.exp_downs_ptr[unsafe_offset=e] if Int(lw.exp_downs_ptr) != 0 else lw.w_down
+            moe.experts.append(MoEExpertWeights(wg, wu, wd, lw.dtype))
+        forward_moe_ffn(x, xbp, hb, hb2, moe, dim, hidden_dim, wid, sh)
+    elif Int(lw.w_gate) != 0 and Int(lw.w_up) != 0:
         var c_gate_up = StaticTuple[FloatPtr, 2](hb, hb2)
         var w_gate_up = StaticTuple[BytePtr, 2](lw.w_gate, lw.w_up)
         matmul_quant_fused[2](lw.dtype, c_gate_up, xbp, w_gate_up, f0, f1, dim)

@@ -157,6 +157,28 @@ struct llama_model(Movable):
             lw.w_gate = gguf.get_tensor_ptr(pfx + "ffn_gate.weight")
             lw.w_up = gguf.get_tensor_ptr(pfx + "ffn_up.weight")
             lw.w_down = gguf.get_tensor_ptr(pfx + "ffn_down.weight")
+
+            # MoE Router and Expert Weight Ingestion
+            var router_ptr = gguf.get_tensor_ptr(pfx + "ffn_gate_inp.weight")
+            if Int(router_ptr) != 0:
+                lw.is_moe = True
+                lw.w_router = router_ptr.unsafe_bitcast[Float32]()
+                lw.n_experts = config.n_experts if config.n_experts > 0 else 8
+                lw.n_experts_used = config.n_experts_used if config.n_experts_used > 0 else 2
+                var g_arr = unsafe_alloc[BytePtr](lw.n_experts)
+                var u_arr = unsafe_alloc[BytePtr](lw.n_experts)
+                var d_arr = unsafe_alloc[BytePtr](lw.n_experts)
+                for e in range(lw.n_experts):
+                    var exp_pfx = pfx + "ffn_gate." + String(e) + ".weight"
+                    g_arr[unsafe_offset=e] = gguf.get_tensor_ptr(exp_pfx)
+                    var up_pfx = pfx + "ffn_up." + String(e) + ".weight"
+                    u_arr[unsafe_offset=e] = gguf.get_tensor_ptr(up_pfx)
+                    var down_pfx = pfx + "ffn_down." + String(e) + ".weight"
+                    d_arr[unsafe_offset=e] = gguf.get_tensor_ptr(down_pfx)
+                lw.exp_gates_ptr = g_arr
+                lw.exp_ups_ptr = u_arr
+                lw.exp_downs_ptr = d_arr
+
             lw.dtype = config.quant_type
             if gguf.has_tensor(pfx + "attn_q.weight"):
                 try:
@@ -517,7 +539,7 @@ def llama_decode(ctx: llama_context_p, batch: llama_batch) -> Int32:
 
         # Step 2: Multi-layer transformer forward passes
         for l in range(cfg.n_layers):
-            var lw = model[].layers[l]
+            var lw = model[].layers[l].copy()
             def worker_fn(wid: Int) {imm}:
                 forward_layer_dense(
                     l,
@@ -576,21 +598,21 @@ def llama_decode(ctx: llama_context_p, batch: llama_batch) -> Int32:
     return 0
 
 def llama_encode(ctx: llama_context_p, batch: llama_batch) -> Int32:
-    """Alias for encoder-only or prompt prefill forward pass."""
+    """ Alias for encoder-only or prompt prefill forward pass."""
     return llama_decode(ctx, batch)
 
 # ─── Logits & Embeddings Extraction ──────────────────────────────────────────
 
 @always_inline
 def llama_get_logits(ctx: llama_context_p) -> FloatPtr:
-    """Return pointer to output logits for the last token decoded."""
+    """ Return pointer to output logits for the last token decoded."""
     if Int(ctx) == 0:
         return null_ptr[Float32]()
     return ctx[].logits
 
 @always_inline
 def llama_get_logits_ith(ctx: llama_context_p, i: Int32) -> FloatPtr:
-    """Return pointer to output logits for the $i$-th token in the last batch."""
+    """ Return pointer to output logits for the $i$-th token in the last batch."""
     if Int(ctx) == 0:
         return null_ptr[Float32]()
     var vocab_size = max(1, ctx[].vocab_size)
@@ -598,7 +620,7 @@ def llama_get_logits_ith(ctx: llama_context_p, i: Int32) -> FloatPtr:
 
 @always_inline
 def llama_get_embeddings(ctx: llama_context_p) -> FloatPtr:
-    """Return pointer to normalized embeddings."""
+    """ Return pointer to normalized embeddings."""
     if Int(ctx) == 0:
         return null_ptr[Float32]()
     return ctx[].embeddings
