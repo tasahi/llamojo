@@ -315,6 +315,18 @@ struct llama_token_data_array(ImplicitlyCopyable, Copyable, Movable):
     var selected: Int64
     var sorted: Bool
 
+    def __init__(
+        out self,
+        data: Pointer[llama_token_data, MutUntrackedOrigin],
+        size: Int,
+        sorted: Bool = False,
+        selected: Int64 = -1,
+    ):
+        self.data = data
+        self.size = size
+        self.selected = selected
+        self.sorted = sorted
+
 # ─── Dynamic Runtime Model Configuration ─────────────────────────────────────
 
 @fieldwise_init

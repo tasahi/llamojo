@@ -1,4 +1,4 @@
-"""Llamojo — Pure Mojo implementation of the llama.cpp library (`libllama`)."""
+""" Llamojo — Pure Mojo implementation of the llama.cpp library (`libllama`)."""
 
 from .types import (
     GGUF_MAGIC,
@@ -92,8 +92,47 @@ from .backend import (
     LayerWeights,
     forward_layer_dense,
 )
+from .vocab import (
+    llama_vocab,
+    llama_vocab_p,
+    llama_tokenize,
+    llama_token_to_piece,
+    llama_detokenize,
+    llama_vocab_bos,
+    llama_vocab_eos,
+    llama_vocab_eot,
+    llama_vocab_is_eog,
+    llama_vocab_n_tokens,
+)
+from .sampler import (
+    llama_sampler,
+    llama_sampler_p,
+    llama_sampler_params,
+    llama_sampler_chain_default_params,
+    llama_sampler_chain_init,
+    llama_sampler_chain_add,
+    llama_sampler_init_top_k,
+    llama_sampler_init_top_p,
+    llama_sampler_init_min_p,
+    llama_sampler_init_temp,
+    llama_sampler_init_penalties,
+    llama_sampler_init_greedy,
+    llama_sampler_init_dist,
+    llama_sampler_init_grammar,
+    llama_sampler_accept,
+    llama_sampler_apply,
+    llama_sampler_sample,
+    llama_sampler_free,
+)
+from .quantize import (
+    llama_model_quantize,
+    quantize_q4_0_row,
+    quantize_q5_0_row,
+    quantize_q8_0_row,
+    quantize_q4_k_row,
+    quantize_q6_k_row,
+)
 from .llama import (
-    llama_model,
     llama_model_p,
     llama_context,
     llama_context_p,

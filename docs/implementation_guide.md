@@ -114,6 +114,49 @@ In Mojo 1.1.0, sublibraries are imported without code changes or wrapper overhea
 - `llama_model_load_from_file` / `llama_model_free`: Lifecycle management returning opaque `llama_model_p` handles.
 - Model metadata inspection functions: `llama_model_n_embd`, `llama_model_n_layer`, `llama_model_n_head`, `llama_model_n_head_kv`, `llama_model_n_ctx_train`, `llama_model_n_vocab`, `llama_model_desc`, `llama_model_meta_val_str`.
 
+### 4.7 KV Cache & PagedAttention Subsystem (`src/llamojo/kv_cache.mojo`)
+- **`PageTable`**: Block allocation manager organizing key/value context memory into discrete pages with physical-to-logical translation tables, free list reclamation, and multi-sequence tracking.
+- **`LlamaKVCache`**: Manages sliding-window or non-contiguous KV cells across all model layers.
+- **Sequence Manipulation**: Implements `llama_kv_cache_clear`, `llama_kv_cache_seq_rm`, `llama_kv_cache_seq_cp`, `llama_kv_cache_seq_keep`, and `llama_kv_cache_seq_add` for multi-turn conversational pruning and prefix caching.
+
+### 4.8 Transformer Decode Engine (`src/llamojo/llama.mojo`)
+- **`llama_decode`**: Full multi-layer auto-regressive transformer forward pass executing:
+  - Fused RMSNorm on input hidden states.
+  - Multi-threaded quantized matmul for queries, keys, and values.
+  - NeoX / interleaved rotary positional embeddings (RoPE).
+  - PagedAttention and Grouped-Query Attention (`gqa_decode`).
+  - Output projection matmul and residual addition.
+  - FFN pre-norm followed by fused Gate/Up SwiGLU projection.
+  - Down projection matmul and final residual accumulation.
+  - Output norm and final vocabulary projection to logits buffer (`llama_get_logits`, `llama_get_logits_ith`).
+
+### 4.9 GGUF Vocabulary & Tokenizer Engine (`src/llamojo/vocab.mojo`)
+- **Metadata Extraction**: Extracts vocabulary tokens, scores, token types, and special token markers (`bos`, `eos`, `eot`, `pad`) directly from GGUF metadata dictionaries.
+- **BPE Tokenization**: Byte-Pair Encoding implementation supporting recursive merges, SentencePiece whitespace markers (` `, U+2581), and hexadecimal byte fallbacks (`<0xXX>`).
+- **Public API**: `llama_tokenize`, `llama_token_to_piece`, `llama_detokenize`, and query helpers (`llama_vocab_bos`, `llama_vocab_eos`, `llama_vocab_is_eog`, `llama_vocab_n_tokens`).
+
+### 4.10 Composable Sampling Pipeline (`src/llamojo/sampler.mojo`)
+- **Chain Architecture**: Tagged-union `llama_sampler` struct supporting arbitrary chained filters with `llama_sampler_chain_init` and `llama_sampler_chain_add`.
+- **Supported Stages**:
+  - Repetition, frequency, and presence penalties (`llama_sampler_init_penalties`).
+  - Temperature scaling (`llama_sampler_init_temp`).
+  - Top-K filtering (`llama_sampler_init_top_k`).
+  - Softmax probability calculation and Top-P / Nucleus sampling (`llama_sampler_init_top_p`).
+  - Min-P noise-threshold filtering (`llama_sampler_init_min_p`).
+  - Greedy argmax (`llama_sampler_init_greedy`) and PRNG categorical distribution sampling (`llama_sampler_init_dist`).
+  - Context acceptance tracking (`llama_sampler_accept`) and memory teardown (`llama_sampler_free`).
+
+### 4.11 Multi-threaded Block Quantizer & GGUF Converter (`src/llamojo/quantize.mojo`)
+- **Pure-Mojo Quantizers**: Multi-threaded parallel block encoders (`parallelize`) for `Q4_0`, `Q5_0`, `Q8_0`, `Q4_K`, and `Q6_K`.
+- **IEEE 754 Float16 Encoder**: Pure-Mojo `encode_f16` for block scale factors.
+- **`llama_model_quantize`**: Full streaming model converter reading source GGUF files and emitting quantized v3 files with 24-byte headers and aligned tensor payload buffers.
+
+### 4.12 CLI Utilities & HTTP Inference Server (`tools/`)
+- [`tools/llama_cli.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_cli.mojo): Standalone interactive command-line generation tool.
+- [`tools/llama_bench.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_bench.mojo): Micro-benchmarking harness measuring prompt processing and generation throughput (tok/s).
+- [`tools/llama_quantize.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_quantize.mojo): CLI interface for model quantization.
+- [`tools/llama_server.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_server.mojo): Zero-dependency HTTP inference server using POSIX socket syscalls.
+
 ---
 
 ## 5. Verification & Testing
@@ -125,5 +168,6 @@ All modules are verified via the automated test runner [`run-tests.sh`](file:///
 | [`tests/test_gguf.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_gguf.mojo) | GGUF v3 parsing, `mmap` vs `heap` binding, non-owning `Matrix` views, GGML type block sizes | Passed |
 | [`tests/test_llama_api.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_llama_api.mojo) | `llama.h` API, model inspection, persistent spin-barrier multi-worker pool | Passed |
 | [`tests/test_kernels.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_kernels.mojo) | Fused RMSNorm+Res, SwiGLU, RoPE rotation, Q8_0 quant, `k4_scale`, Q4_K / MXFP4 dot, multi-matrix fusion ($n=3$) | Passed |
-| `mojo precompile` | Clean binary package generation ([`build/llamojo.mojoc`](file:///mnt/c/Documents/Mojo/llamojo/build/llamojo.mojoc)) | Passed (0 warnings) |
-
+| [`tests/test_context_decode.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_context_decode.mojo) | KV Cache, PageTable allocation, sequence manipulation, `llama_batch`, multi-layer `llama_decode` forward pass | Passed |
+| [`tests/test_vocab_sampler.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_vocab_sampler.mojo) | GGUF vocabulary BPE tokenization/detokenization, composable sampler pipeline (penalties, temp, top-k, top-p, greedy), block quantizers (Q4_0, Q8_0, Q4_K, Q6_K) | Passed |
+| `mojo precompile` | Clean binary package generation ([`build/llamojo.mojoc`](file:///mnt/c/Documents/Mojo/llamojo/build/llamojo.mojoc) — 358 KB) | Passed (0 errors) |

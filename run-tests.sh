@@ -12,10 +12,11 @@ TESTS=(
     "tests/test_llama_api.mojo"
     "tests/test_kernels.mojo"
     "tests/test_context_decode.mojo"
+    "tests/test_vocab_sampler.mojo"
 )
 
 echo "============================================================"
-echo "Running llamojo Test Suite (Phases 1, 2 & 3)"
+echo "Running llamojo Test Suite (Phases 1, 2, 3 & 4)"
 echo "============================================================"
 
 for test in "${TESTS[@]}"; do
