@@ -9,6 +9,7 @@ from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 
 from llamojo import (
+    null_ptr,
     llama_backend_init,
     llama_backend_free,
     llama_model_default_params,
@@ -39,6 +40,9 @@ from llamojo import (
     llama_sampler_init_dist,
     llama_sampler_sample,
     llama_sampler_free,
+    llama_sampler,
+    llama_sampler_p,
+    llama_sampler_params,
 )
 
 def main():
@@ -46,8 +50,9 @@ def main():
     var model_path = "test_model.gguf"
     var prompt = "Once upon a time"
     var n_predict = 32
+    var temp: Float32 = 0.8
 
-    # Parse arguments (supports positional or flags -m, -p, -n)
+    # Parse arguments (supports positional or flags -m, -p, -n, --temp)
     var idx = 1
     while idx < len(args):
         var a = args[idx]
@@ -62,6 +67,12 @@ def main():
                 n_predict = Int(args[idx + 1])
             except:
                 n_predict = 32
+            idx += 2
+        elif (a == "--temp" or a == "-t") and idx + 1 < len(args):
+            try:
+                temp = Float32(Float64(args[idx + 1]))
+            except:
+                temp = 0.8
             idx += 2
         else:
             if idx == 1:
@@ -79,6 +90,7 @@ def main():
     print("Model:", model_path)
     print("Prompt:", prompt)
     print("Max tokens:", n_predict)
+    print("Temperature:", temp)
 
     llama_backend_init()
 
@@ -110,13 +122,15 @@ def main():
 
     print("Prompt tokens count:", n_tokens)
 
-    # Initialize standard sampler chain: Temp(0.8) -> Top-K(40) -> Top-P(0.9) -> Dist(1337)
-    var sparams = llama_sampler_chain_default_params()
-    var smpl = llama_sampler_chain_init(sparams)
-    llama_sampler_chain_add(smpl, llama_sampler_init_temp(Float32(0.8)))
-    llama_sampler_chain_add(smpl, llama_sampler_init_top_k(40))
-    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(Float32(0.9)))
-    llama_sampler_chain_add(smpl, llama_sampler_init_dist(1337))
+    # Initialize standard sampler chain or greedy
+    var smpl: llama_sampler_p = null_ptr[llama_sampler]()
+    if temp > 0.0:
+        var sparams = llama_sampler_chain_default_params()
+        smpl = llama_sampler_chain_init(sparams)
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp))
+        llama_sampler_chain_add(smpl, llama_sampler_init_top_k(40))
+        llama_sampler_chain_add(smpl, llama_sampler_init_top_p(Float32(0.9)))
+        llama_sampler_chain_add(smpl, llama_sampler_init_dist(1337))
 
     # Decode prompt tokens
     var n_vocab = Int(model[].config.vocab_size)
@@ -139,15 +153,26 @@ def main():
         if Int(logits) == 0:
             break
 
-        for v in range(n_vocab):
-            candidates_buf[unsafe_offset=v] = llama_token_data(Int32(v), logits[unsafe_offset=v], Float32(0.0))
+        var next_tok: llama_token = -1
+        if temp <= 0.0:
+            var best_id = 0
+            var max_val = logits[unsafe_offset=0]
+            for v in range(1, n_vocab):
+                var val = logits[unsafe_offset=v]
+                if val > max_val:
+                    max_val = val
+                    best_id = v
+            next_tok = llama_token(best_id)
+        else:
+            for v in range(n_vocab):
+                candidates_buf[unsafe_offset=v] = llama_token_data(Int32(v), logits[unsafe_offset=v], Float32(0.0))
 
-        var cur_p = unsafe_alloc[llama_token_data_array](1)
-        cur_p.unsafe_write(llama_token_data_array(candidates_buf, n_vocab, False))
+            var cur_p = unsafe_alloc[llama_token_data_array](1)
+            cur_p.unsafe_write(llama_token_data_array(candidates_buf, n_vocab, False))
 
-        var next_tok = llama_sampler_sample(smpl, cur_p)
-        cur_p.unsafe_deinit_pointee()
-        cur_p.unsafe_free()
+            next_tok = llama_sampler_sample(smpl, cur_p)
+            cur_p.unsafe_deinit_pointee()
+            cur_p.unsafe_free()
 
         if next_tok < 0 or llama_vocab_is_eog(vocab, next_tok):
             break
@@ -169,7 +194,8 @@ def main():
     candidates_buf.unsafe_free()
     piece_buf.unsafe_free()
     prompt_tokens_buf.unsafe_free()
-    llama_sampler_free(smpl)
+    if Int(smpl) != 0:
+        llama_sampler_free(smpl)
     vocab.unsafe_deinit_pointee()
     vocab.unsafe_free()
     llama_free(ctx)

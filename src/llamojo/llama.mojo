@@ -343,14 +343,16 @@ struct llama_context(Movable):
         self.pool = LlamaWorkerPool(workers=n_threads, dim=self.dim)
 
         # Allocate contiguous activation workspace buffers
+        var max_q_dim = max(self.dim, cfg.n_heads * cfg.head_dim)
+        var max_ffn_dim = max(self.hidden_dim, 12288 if cfg.arch == "gemma4" else self.hidden_dim)
         self.x = unsafe_alloc[Float32](self.dim)
         self.xb = unsafe_alloc[Float32](self.dim)
-        self.xb2 = unsafe_alloc[Float32](self.dim)
-        self.hb = unsafe_alloc[Float32](self.hidden_dim)
-        self.hb2 = unsafe_alloc[Float32](self.hidden_dim)
-        self.q = unsafe_alloc[Float32](self.dim)
-        self.k_buf = unsafe_alloc[Float32](cfg.n_kv_heads * cfg.head_dim)
-        self.v_buf = unsafe_alloc[Float32](cfg.n_kv_heads * cfg.head_dim)
+        self.xb2 = unsafe_alloc[Float32](max_q_dim)
+        self.hb = unsafe_alloc[Float32](max_ffn_dim)
+        self.hb2 = unsafe_alloc[Float32](max_ffn_dim)
+        self.q = unsafe_alloc[Float32](max_q_dim)
+        self.k_buf = unsafe_alloc[Float32](max(cfg.n_kv_heads * cfg.head_dim, 512))
+        self.v_buf = unsafe_alloc[Float32](max(cfg.n_kv_heads * cfg.head_dim, 512))
         self.att_buf = unsafe_alloc[Float32](cfg.n_heads * self.max_ctx)
 
         # Gemma 4 workspace buffer allocations

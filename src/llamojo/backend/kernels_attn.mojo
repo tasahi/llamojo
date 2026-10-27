@@ -61,17 +61,21 @@ def gqa_decode_head(
     max_ctx: Int,
     sliding_window: Int = 0,
     attn_scale: Float32 = 0.0,
+    stride_kv: Int = -1,
 ):
     """ Compute Grouped-Query Attention for a single head `h` at position `pos`.
     
     Q head `h` attends to KV head `h // (n_heads // n_kv_heads)` over history `0..pos`.
     If `sliding_window` > 0, restricts attention to `max(0, pos - sliding_window + 1) .. pos`.
     If `attn_scale` > 0.0, uses `attn_scale` instead of default `1.0 / sqrt(head_dim)`.
+    If `stride_kv` > 0, uses `stride_kv` as the float distance between token cache slots
+    (e.g. for Gemma 4 hybrid SWA/global cache where slots are padded to 512).
     Writes result directly to `out_head`.
     """
     var kv_mul = n_heads // n_kv_heads
     var kv_h = h // kv_mul
     var kv_dim = n_kv_heads * head_dim
+    var slot_stride = stride_kv if stride_kv > 0 else kv_dim
     var q_offset = h * head_dim
     var kv_head_offset = kv_h * head_dim
     var q_head_ptr = q.unsafe_offset(q_offset)
@@ -84,7 +88,7 @@ def gqa_decode_head(
     # 1. Compute dot products Q @ K.T and track maximum for online softmax
     var max_score: Float32 = -1e30
     for t in range(start_t, pos + 1):
-        var k_slot_ptr = k_cache.unsafe_offset(t * kv_dim + kv_head_offset)
+        var k_slot_ptr = k_cache.unsafe_offset(t * slot_stride + kv_head_offset)
         var score = dot_vectors(q_head_ptr, k_slot_ptr, head_dim) * inv_sqrt_d
         att_scores[unsafe_offset=t] = score
         if score > max_score:
@@ -103,26 +107,27 @@ def gqa_decode_head(
     unsafe_memset_zero(out_head, head_dim)
     for t in range(start_t, pos + 1):
         var weight = att_scores[unsafe_offset=t] * inv_sum
-        var v_slot_ptr = v_cache.unsafe_offset(t * kv_dim + kv_head_offset)
+        var v_slot_ptr = v_cache.unsafe_offset(t * slot_stride + kv_head_offset)
         axpy_vector(out_head, v_slot_ptr, weight, head_dim)
 
 @always_inline
 def gqa_decode(
-    q: FloatPtr,
-    k_cache: FloatPtr,
-    v_cache: FloatPtr,
-    att_buf: FloatPtr,
-    out_ptr: FloatPtr,
-    pos: Int,
-    n_heads: Int,
-    n_kv_heads: Int,
-    head_dim: Int,
-    max_ctx: Int,
-    head_start: Int,
-    head_end: Int,
-    sliding_window: Int = 0,
-    attn_scale: Float32 = 0.0,
-):
+        q: FloatPtr,
+        k_cache: FloatPtr,
+        v_cache: FloatPtr,
+        att_buf: FloatPtr,
+        out_ptr: FloatPtr,
+        pos: Int,
+        n_heads: Int,
+        n_kv_heads: Int,
+        head_dim: Int,
+        max_ctx: Int,
+        head_start: Int,
+        head_end: Int,
+        sliding_window: Int = 0,
+        attn_scale: Float32 = 0.0,
+        stride_kv: Int = -1,
+    ):
     """ Compute GQA attention decode for a worker's head range [head_start, head_end)."""
     for h in range(head_start, head_end):
         var att_scores_h = att_buf.unsafe_offset(h * max_ctx)
@@ -139,6 +144,7 @@ def gqa_decode(
             n_kv_heads,
             head_dim,
             max_ctx,
-            sliding_window,
-            attn_scale,
+            sliding_window=sliding_window,
+            attn_scale=attn_scale,
+            stride_kv=stride_kv,
         )

@@ -33,4 +33,4 @@ MOJO_BIN="/home/tasahi/miniconda/envs/moj/bin/mojo"
 
 echo ""
 echo ">>> [2/2] Running llamojo CLI Loader..."
-$MOJO_BIN run -I src -I vendor/llama2.mojo tools/llama_cli.mojo -m "$MODEL_PATH" -p "$PROMPT" -n "$MAX_TOKENS" || true
+$MOJO_BIN run -I src -I vendor/llama2.mojo tools/llama_cli.mojo -m "$MODEL_PATH" -p "$PROMPT" -n "$MAX_TOKENS" --temp 0.0 || true

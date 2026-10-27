@@ -53,35 +53,35 @@ def is_gemma4_swa_layer(layer: Int) -> Bool:
     return (layer % 5) != 4
 
 def forward_gemma4_single_token(
-    token: Int32,
-    pos: Int,
-    cfg: ModelConfig,
-    token_embd: BytePtr,
-    token_embd_type: UInt32,
-    per_layer_token_embd: BytePtr,
-    per_layer_token_embd_type: UInt32,
-    per_layer_model_proj: BytePtr,
-    per_layer_model_proj_type: UInt32,
-    per_layer_proj_norm: FloatPtr,
-    layers: Pointer[LayerWeights, MutUntrackedOrigin],
-    k_cache: FloatPtr,
-    v_cache: FloatPtr,
-    max_ctx: Int,
-    x: FloatPtr,
-    xb: FloatPtr,
-    xb2: FloatPtr,
-    hb: FloatPtr,
-    hb2: FloatPtr,
-    q: FloatPtr,
-    k_buf: FloatPtr,
-    v_buf: FloatPtr,
-    att_buf: FloatPtr,
-    ple_buf: FloatPtr,
-    ple_tok_buf: FloatPtr,
-    ple_proj_buf: FloatPtr,
-    gate_buf: FloatPtr,
-    proj_buf: FloatPtr,
-):
+        token: Int32,
+        pos: Int,
+        cfg: ModelConfig,
+        token_embd: BytePtr,
+        token_embd_type: UInt32,
+        per_layer_token_embd: BytePtr,
+        per_layer_token_embd_type: UInt32,
+        per_layer_model_proj: BytePtr,
+        per_layer_model_proj_type: UInt32,
+        per_layer_proj_norm: FloatPtr,
+        layers: Pointer[LayerWeights, MutUntrackedOrigin],
+        k_cache: FloatPtr,
+        v_cache: FloatPtr,
+        max_ctx: Int,
+        x: FloatPtr,
+        xb: FloatPtr,
+        xb2: FloatPtr,
+        hb: FloatPtr,
+        hb2: FloatPtr,
+        q: FloatPtr,
+        k_buf: FloatPtr,
+        v_buf: FloatPtr,
+        att_buf: FloatPtr,
+        ple_buf: FloatPtr,
+        ple_tok_buf: FloatPtr,
+        ple_proj_buf: FloatPtr,
+        gate_buf: FloatPtr,
+        proj_buf: FloatPtr,
+    ):
     """ Execute pure-Mojo forward pass for a single token in Gemma 4."""
     var dim = cfg.hidden_dim
     var ple_dim = cfg.ple_dim if cfg.ple_dim > 0 else 256
@@ -227,6 +227,7 @@ def forward_gemma4_single_token(
             n_heads,
             sliding_window=sw_len,
             attn_scale=Float32(1.0), # Gemma 4 uses 1.0 attention scale
+            stride_kv=512,           # Gemma 4 KV cache slots are padded to 512 floats
         )
 
         # --- E. Attention Output Projection + Post-Attention Norm + Residual ---
@@ -315,4 +316,3 @@ def forward_gemma4_single_token(
         if lw.layer_output_scale != 1.0:
             for i in range(dim):
                 x[unsafe_offset=i] *= lw.layer_output_scale
-
