@@ -26,6 +26,7 @@ from .isa import (
     bf16_to_f32,
     load_f16_scale,
 )
+from .kernels_norm_rope import gelu
 from ..types import GGMLType, ggml_type_size, ggml_block_size
 
 comptime BytePtr = Pointer[UInt8, MutUntrackedOrigin]
@@ -598,5 +599,50 @@ def gemv_quant(
         for r in range(r_start, r_end):
             var w_row = w.unsafe_offset(r * bpr)
             dst[unsafe_offset=r] = dot_quant_row(dtype, w_row, x, cols)
+
+    parallelize(worker_fn, n_workers, n_workers)
+
+@always_inline
+def gemv_gate_up_fused(
+        hb: FloatPtr,
+        w_gate: BytePtr,
+        dtype_gate: UInt32,
+        w_up: BytePtr,
+        dtype_up: UInt32,
+        xb: FloatPtr,
+        hidden_dim: Int,
+        dim: Int,
+        workers: Int = 0,
+    ):
+    """ Fused Gate and Up GEMVs with inline fused GELU activation in a single pass."""
+    var blk_sz_g = Int(ggml_block_size(dtype_gate))
+    var type_sz_g = Int(ggml_type_size(dtype_gate))
+    var bpr_g = (dim // blk_sz_g) * type_sz_g
+
+    var blk_sz_u = Int(ggml_block_size(dtype_up))
+    var type_sz_u = Int(ggml_type_size(dtype_up))
+    var bpr_u = (dim // blk_sz_u) * type_sz_u
+
+    var n_workers = workers if workers > 0 else num_performance_cores()
+    if n_workers <= 1 or hidden_dim < 512:
+        for r in range(hidden_dim):
+            var w_g_row = w_gate.unsafe_offset(r * bpr_g)
+            var w_u_row = w_up.unsafe_offset(r * bpr_u)
+            var g = dot_quant_row(dtype_gate, w_g_row, xb, dim)
+            var u = dot_quant_row(dtype_up, w_u_row, xb, dim)
+            hb[unsafe_offset=r] = gelu(g) * u
+        return
+
+    var chunk = (hidden_dim + n_workers - 1) // n_workers
+
+    def worker_fn(wid: Int) {imm}:
+        var r_start = wid * chunk
+        var r_end = min((wid + 1) * chunk, hidden_dim)
+        for r in range(r_start, r_end):
+            var w_g_row = w_gate.unsafe_offset(r * bpr_g)
+            var w_u_row = w_up.unsafe_offset(r * bpr_u)
+            var g = dot_quant_row(dtype_gate, w_g_row, xb, dim)
+            var u = dot_quant_row(dtype_up, w_u_row, xb, dim)
+            hb[unsafe_offset=r] = gelu(g) * u
 
     parallelize(worker_fn, n_workers, n_workers)

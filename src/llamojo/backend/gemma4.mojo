@@ -45,6 +45,7 @@ from .kernels_quant import (
     dot_quant_row,
     dequantize_row,
     gemv_quant,
+    gemv_gate_up_fused,
 )
 from .models import LayerWeights
 
@@ -235,11 +236,7 @@ def forward_gemma4_single_token(
         var hidden_dim = 6144 if l < 15 else 12288
         rms_norm(xb, x, lw.ffn_norm, dim, eps)
 
-        gemv_quant(hb, lw.w_gate, lw.dtype_gate, xb, hidden_dim, dim)
-        gemv_quant(hb2, lw.w_up, lw.dtype_up, xb, hidden_dim, dim)
-
-        for i in range(hidden_dim):
-            fused_gelu_mul(hb.unsafe_offset(i), hb2.unsafe_offset(i), hb.unsafe_offset(i), 1)
+        gemv_gate_up_fused(hb, lw.w_gate, lw.dtype_gate, lw.w_up, lw.dtype_up, xb, hidden_dim, dim)
 
         gemv_quant(xb, lw.w_down, lw.dtype_down, hb, dim, hidden_dim)
 

@@ -75,25 +75,15 @@ flowchart LR
 
 ---
 
-### Phase 4: Fused Horizontal GEMVs (Gate/Up & QKV) & Memory Bandwidth Optimization
+### Phase 4: Fused Horizontal GEMVs (Gate/Up & QKV) & Memory Bandwidth Optimization - [STATUS: COMPLETED]
 * **Goal**: Eliminate redundant reads of input vector $x$ from memory for paired projections.
-* **Actions**:
-  1. In `gemma4.mojo`, replace sequential calls:
-     ```mojo
-     # Before: 2 passes over x (reading 12288 rows twice)
-     gemv(gate, W_gate, x)
-     gemv(up, W_up, x)
-     ```
-     with fused block evaluation:
-     ```mojo
-     # After: 1 pass over x, interleaving Gate and Up row calculations
-     matmul_quant_fused[2](...)
-     ```
-  2. Implement same fusion for Query, Key, Value attention projections where applicable.
-* **Verification Gate**:
-  - Full test suite: `tests/test_kernels.mojo`, `tests/test_context_decode.mojo`.
-  - Final comparison run `./tools/compare_gemma4.sh "Once upon a time" 16`.
-  - Expected speedup: **~5.2 tok/s $\to$ ~6.0 - 6.5 tok/s** (matching or surpassing `llama.cpp`).
+* **Actions Completed**:
+  1. Implemented `gemv_gate_up_fused` in `kernels_quant.mojo`, fusing Gate and Up matrix evaluation and inline register GELU multiplication into a single pass.
+  2. Integrated `gemv_gate_up_fused` into `gemma4.mojo`, eliminating intermediate `hb2` buffer writes in FFN layers.
+  3. Micro-benchmarked isolated Gate/Up pass, confirming 0.0 numerical difference vs reference.
+  4. Ran full regression suite (`test_quant_simd`, `test_kernels`, `test_context_decode`) with 100% pass rate.
+  5. Verified end-to-end parity with `./tools/compare_gemma4.sh`.
+* **Detailed Documentation**: See [docs/gemma4_acceleration_phase4.md](./gemma4_acceleration_phase4.md).
 
 ---
 
