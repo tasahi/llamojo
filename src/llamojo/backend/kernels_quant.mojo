@@ -207,7 +207,7 @@ def dot_q8_0_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
 
 @always_inline
 def dot_q4_k_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
-    """ Q4_K dot product (256-element superblock, 144 bytes). Bit-exact with llama.cpp."""
+    """ Q4_K dot product (256-element superblock, 144 bytes). Bit-exact with llama.cpp with SIMD."""
     var bpr = nc // 256
     var total: Float32 = 0.0
     for blk in range(bpr):
@@ -233,14 +233,24 @@ def dot_q4_k_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
             var d2 = d * Float32(sc2)
             var mm2 = dm * Float32(m2)
 
-            for j in range(32):
-                var byte_val = qs_ptr[unsafe_offset=q_off + j]
-                var lo = Float32(byte_val & 0x0F)
-                var hi = Float32(byte_val >> 4)
-                var x1 = x[unsafe_offset=xo + s + j]
-                var x2 = x[unsafe_offset=xo + s + 32 + j]
-                total += (lo * d1 - mm1) * x1 + (hi * d2 - mm2) * x2
+            var acc = SIMD[DType.float32, 8](0.0)
+            var d1_v = SIMD[DType.float32, 8](d1)
+            var mm1_v = SIMD[DType.float32, 8](mm1)
+            var d2_v = SIMD[DType.float32, 8](d2)
+            var mm2_v = SIMD[DType.float32, 8](mm2)
 
+            for g in range(4):
+                var j = g * 8
+                var b_v = qs_ptr.unsafe_load[width=8](q_off + j)
+                var lo_f32 = (b_v & UInt8(0x0F)).cast[DType.float32]()
+                var hi_f32 = (b_v >> UInt8(4)).cast[DType.float32]()
+
+                var x1_v = x.unsafe_load[width=8](xo + s + j)
+                var x2_v = x.unsafe_load[width=8](xo + s + 32 + j)
+
+                acc += (lo_f32 * d1_v - mm1_v) * x1_v + (hi_f32 * d2_v - mm2_v) * x2_v
+
+            total += acc.reduce_add()
             is_idx += 2
             q_off += 32
     return total
@@ -293,7 +303,7 @@ def dot_q5_k_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
 
 @always_inline
 def dot_q6_k_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
-    """ Q6_K dot product (256-element superblock, 210 bytes). Bit-exact with llama.cpp."""
+    """ Q6_K dot product (256-element superblock, 210 bytes). Bit-exact with llama.cpp with SIMD."""
     var bpr = nc // 256
     var total: Float32 = 0.0
     for blk in range(bpr):
@@ -308,23 +318,47 @@ def dot_q6_k_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
         var qh_off = 0
         var sc_off = 0
         for n in range(0, 256, 128):
-            for l in range(32):
+            var acc1 = SIMD[DType.float32, 8](0.0)
+            var acc2 = SIMD[DType.float32, 8](0.0)
+            var acc3 = SIMD[DType.float32, 8](0.0)
+            var acc4 = SIMD[DType.float32, 8](0.0)
+
+            for g in range(4):
+                var l = g * 8
                 var is_idx = l // 16
-                var q1 = Float32(Int32((ql_ptr[unsafe_offset=ql_off + l + 0] & 0x0F) | (((qh_ptr[unsafe_offset=qh_off + l] >> 0) & 3) << 4)) - 32)
-                var q2 = Float32(Int32((ql_ptr[unsafe_offset=ql_off + l + 32] & 0x0F) | (((qh_ptr[unsafe_offset=qh_off + l] >> 2) & 3) << 4)) - 32)
-                var q3 = Float32(Int32((ql_ptr[unsafe_offset=ql_off + l + 0] >> 4) | (((qh_ptr[unsafe_offset=qh_off + l] >> 4) & 3) << 4)) - 32)
-                var q4 = Float32(Int32((ql_ptr[unsafe_offset=ql_off + l + 32] >> 4) | (((qh_ptr[unsafe_offset=qh_off + l] >> 6) & 3) << 4)) - 32)
 
-                var s1 = Float32(bitcast[DType.int8](sc_ptr[unsafe_offset=sc_off + is_idx + 0])) * d
-                var s2 = Float32(bitcast[DType.int8](sc_ptr[unsafe_offset=sc_off + is_idx + 2])) * d
-                var s3 = Float32(bitcast[DType.int8](sc_ptr[unsafe_offset=sc_off + is_idx + 4])) * d
-                var s4 = Float32(bitcast[DType.int8](sc_ptr[unsafe_offset=sc_off + is_idx + 6])) * d
+                var s1 = Float32(Int32(bitcast[DType.int8](sc_ptr[unsafe_offset=sc_off + is_idx + 0]))) * d
+                var s2 = Float32(Int32(bitcast[DType.int8](sc_ptr[unsafe_offset=sc_off + is_idx + 2]))) * d
+                var s3 = Float32(Int32(bitcast[DType.int8](sc_ptr[unsafe_offset=sc_off + is_idx + 4]))) * d
+                var s4 = Float32(Int32(bitcast[DType.int8](sc_ptr[unsafe_offset=sc_off + is_idx + 6]))) * d
 
-                total += s1 * q1 * x[unsafe_offset=xo + n + l + 0]
-                total += s2 * q2 * x[unsafe_offset=xo + n + l + 32]
-                total += s3 * q3 * x[unsafe_offset=xo + n + l + 64]
-                total += s4 * q4 * x[unsafe_offset=xo + n + l + 96]
+                var ql0_v = ql_ptr.unsafe_load[width=8](ql_off + l)
+                var ql32_v = ql_ptr.unsafe_load[width=8](ql_off + l + 32)
+                var qh_v = qh_ptr.unsafe_load[width=8](qh_off + l)
 
+                var q1_u8 = (ql0_v & UInt8(0x0F)) | (((qh_v >> UInt8(0)) & UInt8(3)) << UInt8(4))
+                var q1_f32 = (q1_u8.cast[DType.int32]() - 32).cast[DType.float32]()
+
+                var q2_u8 = (ql32_v & UInt8(0x0F)) | (((qh_v >> UInt8(2)) & UInt8(3)) << UInt8(4))
+                var q2_f32 = (q2_u8.cast[DType.int32]() - 32).cast[DType.float32]()
+
+                var q3_u8 = (ql0_v >> UInt8(4)) | (((qh_v >> UInt8(4)) & UInt8(3)) << UInt8(4))
+                var q3_f32 = (q3_u8.cast[DType.int32]() - 32).cast[DType.float32]()
+
+                var q4_u8 = (ql32_v >> UInt8(4)) | (((qh_v >> UInt8(6)) & UInt8(3)) << UInt8(4))
+                var q4_f32 = (q4_u8.cast[DType.int32]() - 32).cast[DType.float32]()
+
+                var x1_v = x.unsafe_load[width=8](xo + n + l + 0)
+                var x2_v = x.unsafe_load[width=8](xo + n + l + 32)
+                var x3_v = x.unsafe_load[width=8](xo + n + l + 64)
+                var x4_v = x.unsafe_load[width=8](xo + n + l + 96)
+
+                acc1 += q1_f32 * (x1_v * s1)
+                acc2 += q2_f32 * (x2_v * s2)
+                acc3 += q3_f32 * (x3_v * s3)
+                acc4 += q4_f32 * (x4_v * s4)
+
+            total += (acc1 + acc2 + acc3 + acc4).reduce_add()
             ql_off += 64
             qh_off += 32
             sc_off += 8

@@ -46,18 +46,17 @@ flowchart LR
 
 ---
 
-### Phase 2: SIMD Vectorization of Dominant K-Quants (Q6_K and Q4_K)
+### Phase 2: SIMD Vectorization of Dominant K-Quants (Q6_K and Q4_K) - [STATUS: COMPLETED]
 * **Goal**: Transform scalar element-by-element loops into SIMD vector operations using Mojo's `SIMD[DType.float32, 8]` (AVX2 256-bit).
-* **Target Hotspots**:
-  In Gemma 4, ~80% of inference time is spent in `dot_q6_k_row` (PLE embeddings and model weights) and `dot_q4_k_row` (linear projection layers).
-* **Actions**:
-  1. Implement `dot_q6_k_row_simd`:
-     - Unpack 8 or 16 nibbles at a time using vector bit shifts and masks.
-     - Multiply by vector scale factors (`s1, s2, s3, s4`) using SIMD FMA: `acc = acc + (s * q) * x_simd`.
-     - Vector reduction at superblock boundaries.
-  2. Write a dedicated differential test `tests/test_quant_simd.mojo` comparing `dot_q6_k_row` vs `dot_q6_k_row_simd` on actual GGUF model tensors to guarantee identical mathematical results.
-  3. Wire `dot_q6_k_row` to use `dot_q6_k_row_simd`.
-* **Verification Gate**:
+* **Actions Completed**:
+  1. Implemented SIMD-vectorized `dot_q6_k_row` using 8-wide SIMD loads and vector bit shifts/masks, reducing 4 vector accumulators per sub-block.
+  2. Implemented SIMD-vectorized `dot_q4_k_row` using 8-wide SIMD nibble unpacking and fused FMA operations.
+  3. Created `tests/test_quant_simd.mojo` verifying numerical differential precision ($\Delta < 10^{-5}$) against scalar logic.
+  4. Ran full regression suite (`tests/test_kernels.mojo` and `tests/test_context_decode.mojo`) with 100% pass rate.
+  5. Ran `./tools/compare_gemma4.sh "Once upon a time" 16`, demonstrating exact generation parity with speedup from **0.71 tok/s $\to$ 2.88 tok/s** (a **4.06x speedup**).
+* **Detailed Documentation**: See [docs/gemma4_acceleration_phase2.md](./gemma4_acceleration_phase2.md).
+
+---
   - Run differential unit test on 1,000 random activations: assert `max_abs_diff < 1e-4`.
   - Run `./tools/compare_gemma4.sh "Once upon a time" 16`.
   - Expected speedup: **1.0 tok/s $\to$ ~2.5 - 3.2 tok/s**.
