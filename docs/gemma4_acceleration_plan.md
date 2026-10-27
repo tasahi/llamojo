@@ -87,6 +87,29 @@ flowchart LR
 
 ---
 
+### Phase 5: Activation Quantization to Q8 (Q8_K Integer-Domain Dot Products) - [STATUS: COMPLETED]
+* **Goal**: Implement intermediate Q8_K activation quantization and 16-wide integer-domain SIMD dot products (`dot_q6_k_q8_k_row`, `dot_q4_k_q8_k_row`).
+* **Actions Completed**:
+  1. Implemented `quantize_row_q8_k` matching upstream `llama.cpp`'s `quantize_row_q8_K_ref`.
+  2. Implemented integer-domain SIMD dot products `dot_q6_k_q8_k_row` and `dot_q4_k_q8_k_row`.
+  3. Upgraded `gemv_quant` to automatically quantize $x \to \text{Q8\_K}$ once per GEMV pass.
+  4. Ran `./tools/compare_gemma4.sh "Once upon a time" 64`: Achieved exact narrative alignment with `llama.cpp` on the canonical story character **"Squeaky the squirrel"**!
+* **Detailed Documentation**: See [docs/gemma4_acceleration_phase5.md](./gemma4_acceleration_phase5.md).
+
+---
+
+### Phase 6: 2-Row GEMV Register Tiling - [STATUS: COMPLETED]
+* **Goal**: Amortize activation loading overhead by processing pairs of matrix rows $(r, r+1)$ concurrently in registers.
+* **Actions Completed**:
+  1. Implemented `dot_q6_k_q8_k_2rows` and `dot_q4_k_q8_k_2rows` in `kernels_quant.mojo`, sharing 16-wide Q8_K activation loads across both row dot products.
+  2. Integrated 2-row tiling into `gemv_quant` for both single-thread and parallel worker loops with even-chunk boundary alignment.
+  3. Verified bit-for-bit mathematical equivalence (`Diff: 0.0`) in microbenchmarks and observed a ~1.20x kernel-level speedup.
+  4. Ran full regression test suites (`test_kernels.mojo` and `test_context_decode.mojo`) with 100% pass rate.
+  5. Verified end-to-end generation parity (`"Squeaky the squirrel"`) on the AOT compiled binary (`build/llama_cli`).
+* **Detailed Documentation**: See [docs/gemma4_acceleration_phase6.md](./gemma4_acceleration_phase6.md).
+
+---
+
 ## Verification & Rollback Strategy
 
 | Safety Check | Tool / Script | Pass Criteria |
