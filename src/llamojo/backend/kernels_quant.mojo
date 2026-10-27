@@ -110,6 +110,17 @@ def dot_f16_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
         total += wf * x[unsafe_offset=i]
     return total
 
+@always_inline
+def dot_bf16_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
+    """ BF16 weights dot product against Float32 vector."""
+    var total: Float32 = 0.0
+    for i in range(nc):
+        var lo = UInt16(w[unsafe_offset=i * 2])
+        var hi = UInt16(w[unsafe_offset=i * 2 + 1])
+        var wf = bf16_to_f32((hi << 8) | lo)
+        total += wf * x[unsafe_offset=i]
+    return total
+
 
 @always_inline
 def dot_q4_0_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
@@ -330,6 +341,9 @@ def dequantize_row(dtype: UInt32, weight_row_ptr: BytePtr, dst: FloatPtr, nc: In
     elif dtype == GGMLType.F16:
         for i in range(nc):
             dst[unsafe_offset=i] = f16_to_f32(weight_row_ptr.unsafe_bitcast[UInt16]()[unsafe_offset=i])
+    elif dtype == GGMLType.BF16:
+        for i in range(nc):
+            dst[unsafe_offset=i] = bf16_to_f32(weight_row_ptr.unsafe_bitcast[UInt16]()[unsafe_offset=i])
     elif dtype == GGMLType.Q8_0:
         var bpr = nc // 32
         for blk in range(bpr):
@@ -470,6 +484,8 @@ def dot_quant_row(
         return dot_f32_row(weight_row_ptr.unsafe_bitcast[Float32](), x, nc)
     elif dtype == GGMLType.F16:
         return dot_f16_row(weight_row_ptr, x, nc)
+    elif dtype == GGMLType.BF16:
+        return dot_bf16_row(weight_row_ptr, x, nc)
     elif dtype == GGMLType.Q4_0:
         return dot_q4_0_row(weight_row_ptr, x, nc)
     elif dtype == GGMLType.Q4_1:

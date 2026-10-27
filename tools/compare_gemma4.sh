@@ -2,7 +2,9 @@
 # Compare Gemma 4 inference between llama.cpp and llamojo
 set -e
 
-MODEL_PATH=$(python -c '
+PYTHON_BIN="/home/tasahi/miniconda/envs/moj/bin/python"
+
+MODEL_PATH=$($PYTHON_BIN -c '
 import glob, os
 m = glob.glob(os.path.expanduser("~/.cache/huggingface/hub/models--mradermacher--gemma-4-E2B-it-GGUF/snapshots/*/*.gguf"))
 if m: print(os.path.realpath(m[0]))
@@ -25,9 +27,10 @@ echo "Tokens : $MAX_TOKENS"
 echo ""
 
 echo ">>> [1/2] Running llama.cpp Reference Test..."
-python tools/test_gemma4.py --model "$MODEL_PATH" -p "$PROMPT" -n "$MAX_TOKENS"
+$PYTHON_BIN tools/test_gemma4.py --model "$MODEL_PATH" -p "$PROMPT" -n "$MAX_TOKENS"
+
+MOJO_BIN="/home/tasahi/miniconda/envs/moj/bin/mojo"
 
 echo ""
 echo ">>> [2/2] Running llamojo CLI Loader..."
-mojo run -I src -I vendor/llama2.mojo tools/llama_cli.mojo -m "$MODEL_PATH" -p "$PROMPT" -n "$MAX_TOKENS" || true
-
+$MOJO_BIN run -I src -I vendor/llama2.mojo tools/llama_cli.mojo -m "$MODEL_PATH" -p "$PROMPT" -n "$MAX_TOKENS" || true

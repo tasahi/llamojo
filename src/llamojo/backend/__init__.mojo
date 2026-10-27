@@ -59,6 +59,7 @@ from .kernels_quant import (
     quantize_row_q8_0,
     dot_f32_row,
     dot_f16_row,
+    dot_bf16_row,
     dot_q4_0_row,
     dot_q4_1_row,
     dot_q5_0_row,
@@ -80,6 +81,10 @@ from .kernels_attn import (
 from .models import (
     LayerWeights,
     forward_layer_dense,
+)
+from .gemma4 import (
+    is_gemma4_swa_layer,
+    forward_gemma4_single_token,
 )
 from .moe import (
     MoEExpertWeights,

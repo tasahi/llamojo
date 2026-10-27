@@ -80,6 +80,7 @@ from .backend import (
     quantize_row_q8_0,
     dot_f32_row,
     dot_f16_row,
+    dot_bf16_row,
     dot_q4_0_row,
     dot_q4_1_row,
     dot_q5_0_row,
@@ -96,6 +97,8 @@ from .backend import (
     gqa_decode,
     LayerWeights,
     forward_layer_dense,
+    is_gemma4_swa_layer,
+    forward_gemma4_single_token,
 )
 from .vocab import (
     VOCAB_TYPE_NONE,

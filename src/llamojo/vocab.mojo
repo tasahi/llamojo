@@ -456,6 +456,10 @@ struct llama_vocab(Movable):
             self.token_to_id[self.tokens[i]] = Int32(i)
 
         self.add_bos = gguf.get_bool("tokenizer.ggml.add_bos_token", True)
+        if self.model_type == "gemma4" or self.model_type == "gemma-4":
+            # Workaround for Gemma 4 (matches upstream llama.cpp PR #21500):
+            # Gemma 4 requires BOS=2 at the start of sequence even if add_bos_token is set to false in GGUF.
+            self.add_bos = True
         self.bos_id = Int32(gguf.get_int("tokenizer.ggml.bos_token_id", 1))
         self.eos_id = Int32(gguf.get_int("tokenizer.ggml.eos_token_id", 2))
         self.eot_id = Int32(gguf.get_int("tokenizer.ggml.eot_token_id", -1))
@@ -566,6 +570,75 @@ def tokenize_bpe(
         tokens.append(vocab[].bos_id)
 
     if text.byte_length() == 0:
+        return tokens^
+
+    if (vocab[].model_type == "gemma4" or vocab[].model_type == "gemma-4") and len(vocab[].merge_ranks) > 0:
+        # Gemma 4 SPM-style BPE:
+        # 1. Replace spaces with SentencePiece marker \u2581 (0xE2 0x96 0x81)
+        var sp_marker = "\u2581"
+        var norm_text = String("")
+        var n_bytes = text.byte_length()
+        var t_ptr = text.unsafe_ptr()
+        for i in range(n_bytes):
+            if t_ptr[unsafe_offset=i] == 32:
+                norm_text += sp_marker
+            else:
+                norm_text += String(text[byte=i:i + 1])
+
+        # 2. Split into UTF-8 codepoints
+        var blen = norm_text.byte_length()
+        var norm_ptr = norm_text.unsafe_ptr()
+        var u_chars = List[String]()
+        var offs = 0
+        while offs < blen:
+            var b = norm_ptr[unsafe_offset=offs]
+            var clen = 1
+            if (b & 0x80) == 0:
+                clen = 1
+            elif (b & 0xE0) == 0xC0:
+                clen = 2
+            elif (b & 0xF0) == 0xE0:
+                clen = 3
+            elif (b & 0xF8) == 0xF0:
+                clen = 4
+            clen = min(clen, blen - offs)
+            u_chars.append(String(norm_text[byte=offs:offs + clen]))
+            offs += clen
+
+        # 3. Iteratively merge highest-priority (lowest rank) bigrams from merge_ranks
+        while len(u_chars) > 1:
+            var best_rank = 1000000000
+            var best_idx = -1
+            var best_merged = String("")
+
+            for i in range(len(u_chars) - 1):
+                var c0 = u_chars[i]
+                var c1 = u_chars[i + 1]
+                var pair_str = c0 + " " + c1
+                var rank_opt = vocab[].merge_ranks.find(pair_str)
+                if rank_opt:
+                    var rank = rank_opt.value()
+                    if rank < best_rank:
+                        best_rank = rank
+                        best_idx = i
+                        best_merged = c0 + c1
+
+            if best_idx == -1:
+                break
+
+            var next_chars = List[String]()
+            for i in range(best_idx):
+                next_chars.append(u_chars[i])
+            next_chars.append(best_merged)
+            for i in range(best_idx + 2, len(u_chars)):
+                next_chars.append(u_chars[i])
+            u_chars = next_chars^
+
+        for p_i in range(len(u_chars)):
+            var tid = vocab[].find_token(u_chars[p_i])
+            if tid != -1:
+                tokens.append(tid)
+
         return tokens^
 
     if vocab[].model_type == "gpt2" and len(vocab[].merge_ranks) > 0:

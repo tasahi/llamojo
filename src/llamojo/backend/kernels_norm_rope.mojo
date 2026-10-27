@@ -299,13 +299,18 @@ def apply_rope_neox(
         pos: Int,
         rope_theta: Float32 = 10000.0,
         rope_freq_scale: Float32 = 1.0,
+        max_rot_dim: Int = -1,
     ):
-    """ Apply NeoX/half-split style RoPE (Llama-3/Qwen) directly in-place."""
+    """ Apply NeoX/half-split style RoPE (Llama-3/Qwen/Gemma) directly in-place.
+    If max_rot_dim > 0, only pairs within max_rot_dim are rotated (dimensions >= max_rot_dim are left unchanged),
+    matching proportional RoPE / rope_freqs cutoff in Gemma 4.
+    """
     var inv_theta = Float32(1.0) / rope_theta
     var half_dim = head_dim // 2
+    var rot_half = (max_rot_dim // 2) if (max_rot_dim > 0 and max_rot_dim < head_dim) else half_dim
     for h in range(n_heads):
         var q_head = q.unsafe_offset(h * head_dim)
-        for i in range(half_dim):
+        for i in range(rot_half):
             var freq = pow(inv_theta, (Float32(i * 2) / Float32(head_dim)) * rope_freq_scale)
             var angle = Float32(pos) * freq
             var cos_a = cos(angle)
@@ -317,7 +322,7 @@ def apply_rope_neox(
 
     for h in range(n_kv_heads):
         var k_head = k.unsafe_offset(h * head_dim)
-        for i in range(half_dim):
+        for i in range(rot_half):
             var freq = pow(inv_theta, (Float32(i * 2) / Float32(head_dim)) * rope_freq_scale)
             var angle = Float32(pos) * freq
             var cos_a = cos(angle)

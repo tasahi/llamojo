@@ -1,4 +1,4 @@
-"""Public llama.h-compatible API for llamojo.\n
+""" Public llama.h-compatible API for llamojo.\n
 Phases 1-3 complete implementation:
   - llama_backend_init / llama_backend_free / llama_print_system_info
   - llama_model_default_params / llama_context_default_params / llama_model_quantize_default_params
@@ -57,6 +57,8 @@ from .backend import (
     chunk_end,
     LayerWeights,
     forward_layer_dense,
+    forward_gemma4_single_token,
+    apply_logit_softcapping,
     rms_norm,
     dot_quant_row,
     dequantize_row,
@@ -304,6 +306,14 @@ struct llama_context(Movable):
     var att_buf: FloatPtr
     var logits: FloatPtr
     var embeddings: FloatPtr
+
+    # Gemma 4 auxiliary PLE and gate/proj workspace buffers
+    var ple_buf: FloatPtr
+    var ple_tok_buf: FloatPtr
+    var ple_proj_buf: FloatPtr
+    var gate_buf: FloatPtr
+    var proj_buf: FloatPtr
+
     var allocated: Bool
 
     def __init__(out self, model: llama_model_p, params: llama_context_params):
@@ -343,6 +353,15 @@ struct llama_context(Movable):
         self.v_buf = unsafe_alloc[Float32](cfg.n_kv_heads * cfg.head_dim)
         self.att_buf = unsafe_alloc[Float32](cfg.n_heads * self.max_ctx)
 
+        # Gemma 4 workspace buffer allocations
+        var ple_dim = cfg.ple_dim if cfg.ple_dim > 0 else 256
+        var ple_total = cfg.n_layers * ple_dim
+        self.ple_buf = unsafe_alloc[Float32](ple_total)
+        self.ple_tok_buf = unsafe_alloc[Float32](ple_total)
+        self.ple_proj_buf = unsafe_alloc[Float32](ple_total)
+        self.gate_buf = unsafe_alloc[Float32](ple_dim)
+        self.proj_buf = unsafe_alloc[Float32](self.dim)
+
         var n_batch = Int(params.n_batch) if params.n_batch > 0 else 512
         var logits_size = max(1, self.vocab_size) * n_batch
         self.logits = unsafe_alloc[Float32](logits_size)
@@ -366,6 +385,11 @@ struct llama_context(Movable):
             self.k_buf.unsafe_free()
             self.v_buf.unsafe_free()
             self.att_buf.unsafe_free()
+            self.ple_buf.unsafe_free()
+            self.ple_tok_buf.unsafe_free()
+            self.ple_proj_buf.unsafe_free()
+            self.gate_buf.unsafe_free()
+            self.proj_buf.unsafe_free()
             self.logits.unsafe_free()
             if Int(self.embeddings) != 0:
                 self.embeddings.unsafe_free()
@@ -602,70 +626,132 @@ def llama_decode(ctx: llama_context_p, batch: llama_batch) -> Int32:
         var token = batch.token[unsafe_offset=tok_idx]
         var pos = Int(batch.pos[unsafe_offset=tok_idx])
 
-        # Step 1: Token embedding lookup into ctx.x
-        if Int(batch.embd) != 0:
-            var embd_token = batch.embd.unsafe_offset(tok_idx * dim)
-            unsafe_memcpy(dest=ctx[].x, src=embd_token, count=dim)
+        if cfg.arch == "gemma4":
+            # Dedicated Gemma 4 forward execution pipeline
+            forward_gemma4_single_token(
+                token,
+                pos,
+                cfg,
+                model[].token_embd,
+                model[].token_embd_type,
+                model[].per_layer_token_embd,
+                model[].per_layer_token_embd_type,
+                model[].per_layer_model_proj,
+                model[].per_layer_model_proj_type,
+                model[].per_layer_proj_norm,
+                model[].layers.unsafe_ptr(),
+                ctx[].kv_cache.k_f32,
+                ctx[].kv_cache.v_f32,
+                ctx[].max_ctx,
+                ctx[].x,
+                ctx[].xb,
+                ctx[].xb2,
+                ctx[].hb,
+                ctx[].hb2,
+                ctx[].q,
+                ctx[].k_buf,
+                ctx[].v_buf,
+                ctx[].att_buf,
+                ctx[].ple_buf,
+                ctx[].ple_tok_buf,
+                ctx[].ple_proj_buf,
+                ctx[].gate_buf,
+                ctx[].proj_buf,
+            )
+
+            # Gemma 4 Final Output Norm + Tied LM-Head + Softcapping
+            if batch.logits[unsafe_offset=tok_idx] != 0:
+                var xbp = sh[].xbp
+                rms_norm(xbp, ctx[].x, model[].output_norm, dim, cfg.norm_eps)
+
+                var out_logits = ctx[].logits.unsafe_offset(tok_idx * vocab_size)
+                var blk_sz_out = Int(ggml_block_size(model[].output_weight_type))
+                var type_sz_out = Int(ggml_type_size(model[].output_weight_type))
+                var bpr_out = (dim // blk_sz_out) * type_sz_out
+
+                def gemma4_logits_worker(wid: Int) {imm}:
+                    var v0 = chunk_start(vocab_size, wid, workers)
+                    var v1 = chunk_end(vocab_size, wid, workers)
+                    for r in range(v0, v1):
+                        var w_row = model[].output_weight.unsafe_offset(r * bpr_out)
+                        out_logits[unsafe_offset=r] = dot_quant_row(model[].output_weight_type, w_row, xbp, dim)
+
+                if workers == 1:
+                    gemma4_logits_worker(0)
+                else:
+                    parallelize(gemma4_logits_worker, workers, workers)
+
+                # Gemma 4 Logit Softcapping
+                if cfg.logit_softcap > 0.0:
+                    apply_logit_softcapping(out_logits, vocab_size, cfg.logit_softcap)
         else:
-            var emb_ptr = model[].token_embd
-            var emb_type = model[].token_embd_type
-            var blk_sz = Int(ggml_block_size(emb_type))
-            var type_sz = Int(ggml_type_size(emb_type))
-            var bpr = (dim // blk_sz) * type_sz
-            var row_ptr = emb_ptr.unsafe_offset(Int(token) * bpr)
-            dequantize_row(emb_type, row_ptr, ctx[].x, dim)
-
-        # Step 2: Multi-layer transformer forward passes
-        for l in range(cfg.n_layers):
-            var lw = model[].layers[l].copy()
-            def worker_fn(wid: Int) {imm}:
-                forward_layer_dense(
-                    l,
-                    pos,
-                    lw,
-                    cfg,
-                    ctx[].x,
-                    ctx[].xb,
-                    ctx[].xb2,
-                    ctx[].hb,
-                    ctx[].hb2,
-                    ctx[].q,
-                    ctx[].k_buf,
-                    ctx[].v_buf,
-                    ctx[].att_buf,
-                    ctx[].kv_cache.k_f32,
-                    ctx[].kv_cache.v_f32,
-                    ctx[].max_ctx,
-                    wid,
-                    sh,
-                )
-
-            if workers == 1:
-                worker_fn(0)
+            # Step 1: Token embedding lookup into ctx.x
+            if Int(batch.embd) != 0:
+                var embd_token = batch.embd.unsafe_offset(tok_idx * dim)
+                unsafe_memcpy(dest=ctx[].x, src=embd_token, count=dim)
             else:
-                parallelize(worker_fn, workers, workers)
+                var emb_ptr = model[].token_embd
+                var emb_type = model[].token_embd_type
+                var blk_sz = Int(ggml_block_size(emb_type))
+                var type_sz = Int(ggml_type_size(emb_type))
+                var bpr = (dim // blk_sz) * type_sz
+                var row_ptr = emb_ptr.unsafe_offset(Int(token) * bpr)
+                dequantize_row(emb_type, row_ptr, ctx[].x, dim)
 
-        # Step 3: Compute final logits if requested for this token index
-        if batch.logits[unsafe_offset=tok_idx] != 0:
-            var xbp = sh[].xbp
-            rms_norm(xbp, ctx[].x, model[].output_norm, dim, cfg.norm_eps)
+            # Step 2: Multi-layer transformer forward passes
+            for l in range(cfg.n_layers):
+                var lw = model[].layers[l].copy()
+                def worker_fn(wid: Int) {imm}:
+                    forward_layer_dense(
+                        l,
+                        pos,
+                        lw,
+                        cfg,
+                        ctx[].x,
+                        ctx[].xb,
+                        ctx[].xb2,
+                        ctx[].hb,
+                        ctx[].hb2,
+                        ctx[].q,
+                        ctx[].k_buf,
+                        ctx[].v_buf,
+                        ctx[].att_buf,
+                        ctx[].kv_cache.k_f32,
+                        ctx[].kv_cache.v_f32,
+                        ctx[].max_ctx,
+                        wid,
+                        sh,
+                    )
 
-            var out_logits = ctx[].logits.unsafe_offset(tok_idx * vocab_size)
-            var blk_sz_out = Int(ggml_block_size(model[].output_weight_type))
-            var type_sz_out = Int(ggml_type_size(model[].output_weight_type))
-            var bpr_out = (dim // blk_sz_out) * type_sz_out
+                if workers == 1:
+                    worker_fn(0)
+                else:
+                    parallelize(worker_fn, workers, workers)
 
-            def logits_worker(wid: Int) {imm}:
-                var v0 = chunk_start(vocab_size, wid, workers)
-                var v1 = chunk_end(vocab_size, wid, workers)
-                for r in range(v0, v1):
-                    var w_row = model[].output_weight.unsafe_offset(r * bpr_out)
-                    out_logits[unsafe_offset=r] = dot_quant_row(model[].output_weight_type, w_row, xbp, dim)
+            # Step 3: Compute final logits if requested for this token index
+            if batch.logits[unsafe_offset=tok_idx] != 0:
+                var xbp = sh[].xbp
+                rms_norm(xbp, ctx[].x, model[].output_norm, dim, cfg.norm_eps)
 
-            if workers == 1:
-                logits_worker(0)
-            else:
-                parallelize(logits_worker, workers, workers)
+                var out_logits = ctx[].logits.unsafe_offset(tok_idx * vocab_size)
+                var blk_sz_out = Int(ggml_block_size(model[].output_weight_type))
+                var type_sz_out = Int(ggml_type_size(model[].output_weight_type))
+                var bpr_out = (dim // blk_sz_out) * type_sz_out
+
+                def logits_worker(wid: Int) {imm}:
+                    var v0 = chunk_start(vocab_size, wid, workers)
+                    var v1 = chunk_end(vocab_size, wid, workers)
+                    for r in range(v0, v1):
+                        var w_row = model[].output_weight.unsafe_offset(r * bpr_out)
+                        out_logits[unsafe_offset=r] = dot_quant_row(model[].output_weight_type, w_row, xbp, dim)
+
+                if workers == 1:
+                    logits_worker(0)
+                else:
+                    parallelize(logits_worker, workers, workers)
+
+                if cfg.logit_softcap > 0.0:
+                    apply_logit_softcapping(out_logits, vocab_size, cfg.logit_softcap)
 
         # Record embeddings if requested
         if Int(ctx[].embeddings) != 0:
