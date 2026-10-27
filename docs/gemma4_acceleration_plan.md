@@ -110,6 +110,18 @@ flowchart LR
 
 ---
 
+### Phase 7: Hardware-Specific Vector Instructions (AVX2 pmadd.ub.sw) - [STATUS: COMPLETED]
+* **Goal**: Replace scalar-extended integer multiplications with hardware AVX2 `pmadd.ub.sw` and `pmadd.wd` vector instructions via direct LLVM intrinsics in pure Mojo.
+* **Actions Completed**:
+  1. Bound LLVM intrinsics `llvm.x86.avx2.pmadd.ub.sw` (32 unsigned 8-bit $\times$ 32 signed 8-bit $\to$ 16-bit) and `llvm.x86.avx2.pmadd.wd` (16-bit $\to$ 32-bit horizontal sum) via `std.ffi.external_call`.
+  2. Integrated hardware vector multiply-add into `dot_q6_k_q8_k_row`, `dot_q4_k_q8_k_row`, `dot_q6_k_q8_k_2rows`, and `dot_q4_k_q8_k_2rows`.
+  3. Verified microbenchmark performance: achieved **~1.50x speedup** on Q6_K dot products with bit-exact accuracy (`Diff: 0.0`), and **~1.45x speedup** on Q4_K dot products.
+  4. Ran regression suites (`tests/test_kernels.mojo` and `tests/test_context_decode.mojo`) with 100% pass rate.
+  5. Verified end-to-end generation with canonical narrative preservation on the AOT binary.
+* **Detailed Documentation**: See [docs/gemma4_acceleration_phase7.md](./gemma4_acceleration_phase7.md).
+
+---
+
 ## Verification & Rollback Strategy
 
 | Safety Check | Tool / Script | Pass Criteria |

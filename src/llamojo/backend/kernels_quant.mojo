@@ -18,6 +18,7 @@ from std.memory import Pointer, bitcast
 from std.memory.alloc import unsafe_alloc
 from std.utils import StaticTuple
 from std.sys.info import simd_width_of, num_performance_cores
+from std.ffi import external_call
 from max.algorithm import parallelize
 
 from .isa import (
@@ -410,9 +411,11 @@ def dot_q6_k_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
 
 @always_inline
 def dot_q6_k_q8_k_row(w: BytePtr, q8: BytePtr, nc: Int) -> Float32:
-    """ Fast 16-wide integer-domain SIMD dot product: Q6_K weights x Q8_K activations."""
+    """ Hardware-accelerated integer-domain SIMD dot product using AVX2 pmadd.ub.sw."""
     var nb = nc // 256
     var total: Float32 = 0.0
+    var ones = SIMD[DType.int16, 16](1)
+
     for blk in range(nb):
         var bo = blk * 210
         var yo = blk * 292
@@ -444,22 +447,37 @@ def dot_q6_k_q8_k_row(w: BytePtr, q8: BytePtr, nc: Int) -> Float32:
                 var ql32_v = ql_ptr.unsafe_load[width=16](ql_off + l + 32)
                 var qh_v = qh_ptr.unsafe_load[width=16](qh_off + l)
 
-                var q1_i16 = ((ql0_v & UInt8(0x0F)) | (((qh_v >> UInt8(0)) & UInt8(3)) << UInt8(4))).cast[DType.int16]() - 32
-                var q2_i16 = ((ql32_v & UInt8(0x0F)) | (((qh_v >> UInt8(2)) & UInt8(3)) << UInt8(4))).cast[DType.int16]() - 32
-                var q3_i16 = ((ql0_v >> UInt8(4)) | (((qh_v >> UInt8(4)) & UInt8(3)) << UInt8(4))).cast[DType.int16]() - 32
-                var q4_i16 = ((ql32_v >> UInt8(4)) | (((qh_v >> UInt8(6)) & UInt8(3)) << UInt8(4))).cast[DType.int16]() - 32
+                var q1_u = (ql0_v & UInt8(0x0F)) | (((qh_v >> UInt8(0)) & UInt8(3)) << UInt8(4))
+                var q2_u = (ql32_v & UInt8(0x0F)) | (((qh_v >> UInt8(2)) & UInt8(3)) << UInt8(4))
+                var q3_u = (ql0_v >> UInt8(4)) | (((qh_v >> UInt8(4)) & UInt8(3)) << UInt8(4))
+                var q4_u = (ql32_v >> UInt8(4)) | (((qh_v >> UInt8(6)) & UInt8(3)) << UInt8(4))
 
-                var y1_i16 = qs_ptr.unsafe_load[width=16](n + l + 0).cast[DType.int8]().cast[DType.int16]()
-                var y2_i16 = qs_ptr.unsafe_load[width=16](n + l + 32).cast[DType.int8]().cast[DType.int16]()
-                var y3_i16 = qs_ptr.unsafe_load[width=16](n + l + 64).cast[DType.int8]().cast[DType.int16]()
-                var y4_i16 = qs_ptr.unsafe_load[width=16](n + l + 96).cast[DType.int8]().cast[DType.int16]()
+                var y1 = qs_ptr.unsafe_load[width=16](n + l).cast[DType.int8]()
+                var y2 = qs_ptr.unsafe_load[width=16](n + l + 32).cast[DType.int8]()
+                var y3 = qs_ptr.unsafe_load[width=16](n + l + 64).cast[DType.int8]()
+                var y4 = qs_ptr.unsafe_load[width=16](n + l + 96).cast[DType.int8]()
 
-                var p1 = (q1_i16 * y1_i16).cast[DType.int32]().reduce_add() * s1
-                var p2 = (q2_i16 * y2_i16).cast[DType.int32]().reduce_add() * s2
-                var p3 = (q3_i16 * y3_i16).cast[DType.int32]().reduce_add() * s3
-                var p4 = (q4_i16 * y4_i16).cast[DType.int32]().reduce_add() * s4
+                var u32_1 = q1_u.join(q2_u)
+                var s32_1 = y1.join(y2)
 
-                sumi += (p1 + p2 + p3 + p4)
+                var p16_1 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](u32_1, s32_1)
+                var p32_1 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_1, ones)
+
+                var dot1 = p32_1.slice[4, offset=0]().reduce_add() - Int32(32) * y1.cast[DType.int32]().reduce_add()
+                var dot2 = p32_1.slice[4, offset=4]().reduce_add() - Int32(32) * y2.cast[DType.int32]().reduce_add()
+
+                sumi += dot1 * s1 + dot2 * s2
+
+                var u32_2 = q3_u.join(q4_u)
+                var s32_2 = y3.join(y4)
+
+                var p16_2 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](u32_2, s32_2)
+                var p32_2 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_2, ones)
+
+                var dot3 = p32_2.slice[4, offset=0]().reduce_add() - Int32(32) * y3.cast[DType.int32]().reduce_add()
+                var dot4 = p32_2.slice[4, offset=4]().reduce_add() - Int32(32) * y4.cast[DType.int32]().reduce_add()
+
+                sumi += dot3 * s3 + dot4 * s4
 
             ql_off += 64
             qh_off += 32
@@ -470,9 +488,11 @@ def dot_q6_k_q8_k_row(w: BytePtr, q8: BytePtr, nc: Int) -> Float32:
 
 @always_inline
 def dot_q4_k_q8_k_row(w: BytePtr, q8: BytePtr, nc: Int) -> Float32:
-    """ Fast 16-wide integer-domain SIMD dot product: Q4_K weights x Q8_K activations."""
+    """ Hardware-accelerated integer-domain SIMD dot product using AVX2 pmadd.ub.sw."""
     var bpr = nc // 256
     var total: Float32 = 0.0
+    var ones = SIMD[DType.int16, 16](1)
+
     for blk in range(bpr):
         var bo = blk * 144
         var yo = blk * 292
@@ -508,19 +528,30 @@ def dot_q4_k_q8_k_row(w: BytePtr, q8: BytePtr, nc: Int) -> Float32:
             for g in range(2):
                 var j = g * 16
                 var b_v = qs_w.unsafe_load[width=16](q_off + j)
-                var lo_i16 = (b_v & UInt8(0x0F)).cast[DType.int16]()
-                var hi_i16 = (b_v >> UInt8(4)).cast[DType.int16]()
+                var lo_16 = (b_v & UInt8(0x0F)).cast[DType.uint8]()
+                var hi_16 = (b_v >> UInt8(4)).cast[DType.uint8]()
 
-                var y1_i16 = qs_y.unsafe_load[width=16](s + j).cast[DType.int8]().cast[DType.int16]()
-                var y2_i16 = qs_y.unsafe_load[width=16](s + 32 + j).cast[DType.int8]().cast[DType.int16]()
+                var y1_16 = qs_y.unsafe_load[width=16](s + j).cast[DType.int8]()
+                var y2_16 = qs_y.unsafe_load[width=16](s + 32 + j).cast[DType.int8]()
 
-                var dot1 = (lo_i16 * y1_i16).cast[DType.int32]().reduce_add()
-                var sum_y1 = y1_i16.cast[DType.int32]().reduce_add()
+                var lo_u8 = lo_16.join(SIMD[DType.uint8, 16](0))
+                var y1 = y1_16.join(SIMD[DType.int8, 16](0))
+                var hi_u8 = hi_16.join(SIMD[DType.uint8, 16](0))
+                var y2 = y2_16.join(SIMD[DType.int8, 16](0))
 
-                var dot2 = (hi_i16 * y2_i16).cast[DType.int32]().reduce_add()
-                var sum_y2 = y2_i16.cast[DType.int32]().reduce_add()
+                var p16_1 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](lo_u8, y1)
+                var p16_2 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](hi_u8, y2)
 
-                sumi += (Float32(dot1) * d1 - Float32(sum_y1) * mm1) + (Float32(dot2) * d2 - Float32(sum_y2) * mm2)
+                var p32_1 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_1, ones)
+                var p32_2 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_2, ones)
+
+                var dot1 = p32_1.slice[4, offset=0]().reduce_add()
+                var sum_y1 = y1_16.cast[DType.int32]().reduce_add()
+
+                var dot2 = p32_2.slice[4, offset=0]().reduce_add()
+                var sum_y2 = y2_16.cast[DType.int32]().reduce_add()
+
+                sumi += d1 * Float32(dot1) - mm1 * Float32(sum_y1) + d2 * Float32(dot2) - mm2 * Float32(sum_y2)
 
             is_idx += 2
             q_off += 32
@@ -537,10 +568,11 @@ def dot_q6_k_q8_k_2rows(
         mut res0: Float32,
         mut res1: Float32,
     ):
-    """ Tiled 2-row integer-domain SIMD dot product: Q6_K weights x Q8_K activations."""
+    """ Tiled 2-row hardware-accelerated integer-domain SIMD dot product using AVX2 pmadd.ub.sw."""
     var nb = nc // 256
     var total0: Float32 = 0.0
     var total1: Float32 = 0.0
+    var ones = SIMD[DType.int16, 16](1)
 
     for blk in range(nb):
         var bo = blk * 210
@@ -567,23 +599,32 @@ def dot_q6_k_q8_k_2rows(
         var sc_off = 0
 
         for n in range(0, 256, 128):
-            var y1_i16_0 = qs_ptr.unsafe_load[width=16](n + 0).cast[DType.int8]().cast[DType.int16]()
-            var y1_i16_1 = qs_ptr.unsafe_load[width=16](n + 16).cast[DType.int8]().cast[DType.int16]()
-            var y2_i16_0 = qs_ptr.unsafe_load[width=16](n + 32).cast[DType.int8]().cast[DType.int16]()
-            var y2_i16_1 = qs_ptr.unsafe_load[width=16](n + 48).cast[DType.int8]().cast[DType.int16]()
-            var y3_i16_0 = qs_ptr.unsafe_load[width=16](n + 64).cast[DType.int8]().cast[DType.int16]()
-            var y3_i16_1 = qs_ptr.unsafe_load[width=16](n + 80).cast[DType.int8]().cast[DType.int16]()
-            var y4_i16_0 = qs_ptr.unsafe_load[width=16](n + 96).cast[DType.int8]().cast[DType.int16]()
-            var y4_i16_1 = qs_ptr.unsafe_load[width=16](n + 112).cast[DType.int8]().cast[DType.int16]()
+            var y1 = qs_ptr.unsafe_load[width=16](n + 0).cast[DType.int8]()
+            var y2 = qs_ptr.unsafe_load[width=16](n + 32).cast[DType.int8]()
+            var y3 = qs_ptr.unsafe_load[width=16](n + 64).cast[DType.int8]()
+            var y4 = qs_ptr.unsafe_load[width=16](n + 96).cast[DType.int8]()
+
+            var y1_2 = qs_ptr.unsafe_load[width=16](n + 16).cast[DType.int8]()
+            var y2_2 = qs_ptr.unsafe_load[width=16](n + 48).cast[DType.int8]()
+            var y3_2 = qs_ptr.unsafe_load[width=16](n + 80).cast[DType.int8]()
+            var y4_2 = qs_ptr.unsafe_load[width=16](n + 112).cast[DType.int8]()
 
             for g in range(2):
                 var l = g * 16
                 var is_idx = l // 16
 
-                var y1 = y1_i16_0 if g == 0 else y1_i16_1
-                var y2 = y2_i16_0 if g == 0 else y2_i16_1
-                var y3 = y3_i16_0 if g == 0 else y3_i16_1
-                var y4 = y4_i16_0 if g == 0 else y4_i16_1
+                var y_a = y1 if g == 0 else y1_2
+                var y_b = y2 if g == 0 else y2_2
+                var y_c = y3 if g == 0 else y3_2
+                var y_d = y4 if g == 0 else y4_2
+
+                var s32_1 = y_a.join(y_b)
+                var s32_2 = y_c.join(y_d)
+
+                var sum_ya = y_a.cast[DType.int32]().reduce_add()
+                var sum_yb = y_b.cast[DType.int32]().reduce_add()
+                var sum_yc = y_c.cast[DType.int32]().reduce_add()
+                var sum_yd = y_d.cast[DType.int32]().reduce_add()
 
                 # Row 0
                 var s1_0 = Int32(bitcast[DType.int8](sc0_ptr[unsafe_offset=sc_off + is_idx + 0]))
@@ -595,15 +636,26 @@ def dot_q6_k_q8_k_2rows(
                 var ql32_v0 = ql0_ptr.unsafe_load[width=16](ql_off + l + 32)
                 var qh_v0 = qh0_ptr.unsafe_load[width=16](qh_off + l)
 
-                var q1_0 = ((ql0_v0 & UInt8(0x0F)) | (((qh_v0 >> UInt8(0)) & UInt8(3)) << UInt8(4))).cast[DType.int16]() - 32
-                var q2_0 = ((ql32_v0 & UInt8(0x0F)) | (((qh_v0 >> UInt8(2)) & UInt8(3)) << UInt8(4))).cast[DType.int16]() - 32
-                var q3_0 = ((ql0_v0 >> UInt8(4)) | (((qh_v0 >> UInt8(4)) & UInt8(3)) << UInt8(4))).cast[DType.int16]() - 32
-                var q4_0 = ((ql32_v0 >> UInt8(4)) | (((qh_v0 >> UInt8(6)) & UInt8(3)) << UInt8(4))).cast[DType.int16]() - 32
+                var q1_u0 = (ql0_v0 & UInt8(0x0F)) | (((qh_v0 >> UInt8(0)) & UInt8(3)) << UInt8(4))
+                var q2_u0 = (ql32_v0 & UInt8(0x0F)) | (((qh_v0 >> UInt8(2)) & UInt8(3)) << UInt8(4))
+                var q3_u0 = (ql0_v0 >> UInt8(4)) | (((qh_v0 >> UInt8(4)) & UInt8(3)) << UInt8(4))
+                var q4_u0 = (ql32_v0 >> UInt8(4)) | (((qh_v0 >> UInt8(6)) & UInt8(3)) << UInt8(4))
 
-                sumi0 += (q1_0 * y1).cast[DType.int32]().reduce_add() * s1_0
-                sumi0 += (q2_0 * y2).cast[DType.int32]().reduce_add() * s2_0
-                sumi0 += (q3_0 * y3).cast[DType.int32]().reduce_add() * s3_0
-                sumi0 += (q4_0 * y4).cast[DType.int32]().reduce_add() * s4_0
+                var u32_1_0 = q1_u0.join(q2_u0)
+                var u32_2_0 = q3_u0.join(q4_u0)
+
+                var p16_1_0 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](u32_1_0, s32_1)
+                var p16_2_0 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](u32_2_0, s32_2)
+
+                var p32_1_0 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_1_0, ones)
+                var p32_2_0 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_2_0, ones)
+
+                var dot1_0 = p32_1_0.slice[4, offset=0]().reduce_add() - Int32(32) * sum_ya
+                var dot2_0 = p32_1_0.slice[4, offset=4]().reduce_add() - Int32(32) * sum_yb
+                var dot3_0 = p32_2_0.slice[4, offset=0]().reduce_add() - Int32(32) * sum_yc
+                var dot4_0 = p32_2_0.slice[4, offset=4]().reduce_add() - Int32(32) * sum_yd
+
+                sumi0 += dot1_0 * s1_0 + dot2_0 * s2_0 + dot3_0 * s3_0 + dot4_0 * s4_0
 
                 # Row 1
                 var s1_1 = Int32(bitcast[DType.int8](sc1_ptr[unsafe_offset=sc_off + is_idx + 0]))
@@ -615,15 +667,26 @@ def dot_q6_k_q8_k_2rows(
                 var ql32_v1 = ql1_ptr.unsafe_load[width=16](ql_off + l + 32)
                 var qh_v1 = qh1_ptr.unsafe_load[width=16](qh_off + l)
 
-                var q1_1 = ((ql0_v1 & UInt8(0x0F)) | (((qh_v1 >> UInt8(0)) & UInt8(3)) << UInt8(4))).cast[DType.int16]() - 32
-                var q2_1 = ((ql32_v1 & UInt8(0x0F)) | (((qh_v1 >> UInt8(2)) & UInt8(3)) << UInt8(4))).cast[DType.int16]() - 32
-                var q3_1 = ((ql0_v1 >> UInt8(4)) | (((qh_v1 >> UInt8(4)) & UInt8(3)) << UInt8(4))).cast[DType.int16]() - 32
-                var q4_1 = ((ql32_v1 >> UInt8(4)) | (((qh_v1 >> UInt8(6)) & UInt8(3)) << UInt8(4))).cast[DType.int16]() - 32
+                var q1_u1 = (ql0_v1 & UInt8(0x0F)) | (((qh_v1 >> UInt8(0)) & UInt8(3)) << UInt8(4))
+                var q2_u1 = (ql32_v1 & UInt8(0x0F)) | (((qh_v1 >> UInt8(2)) & UInt8(3)) << UInt8(4))
+                var q3_u1 = (ql0_v1 >> UInt8(4)) | (((qh_v1 >> UInt8(4)) & UInt8(3)) << UInt8(4))
+                var q4_u1 = (ql32_v1 >> UInt8(4)) | (((qh_v1 >> UInt8(6)) & UInt8(3)) << UInt8(4))
 
-                sumi1 += (q1_1 * y1).cast[DType.int32]().reduce_add() * s1_1
-                sumi1 += (q2_1 * y2).cast[DType.int32]().reduce_add() * s2_1
-                sumi1 += (q3_1 * y3).cast[DType.int32]().reduce_add() * s3_1
-                sumi1 += (q4_1 * y4).cast[DType.int32]().reduce_add() * s4_1
+                var u32_1_1 = q1_u1.join(q2_u1)
+                var u32_2_1 = q3_u1.join(q4_u1)
+
+                var p16_1_1 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](u32_1_1, s32_1)
+                var p16_2_1 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](u32_2_1, s32_2)
+
+                var p32_1_1 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_1_1, ones)
+                var p32_2_1 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_2_1, ones)
+
+                var dot1_1 = p32_1_1.slice[4, offset=0]().reduce_add() - Int32(32) * sum_ya
+                var dot2_1 = p32_1_1.slice[4, offset=4]().reduce_add() - Int32(32) * sum_yb
+                var dot3_1 = p32_2_1.slice[4, offset=0]().reduce_add() - Int32(32) * sum_yc
+                var dot4_1 = p32_2_1.slice[4, offset=4]().reduce_add() - Int32(32) * sum_yd
+
+                sumi1 += dot1_1 * s1_1 + dot2_1 * s2_1 + dot3_1 * s3_1 + dot4_1 * s4_1
 
             ql_off += 64
             qh_off += 32
@@ -644,10 +707,11 @@ def dot_q4_k_q8_k_2rows(
         mut res0: Float32,
         mut res1: Float32,
     ):
-    """ Tiled 2-row integer-domain SIMD dot product: Q4_K weights x Q8_K activations."""
+    """ Tiled 2-row hardware-accelerated integer-domain SIMD dot product using AVX2 pmadd.ub.sw."""
     var bpr = nc // 256
     var total0: Float32 = 0.0
     var total1: Float32 = 0.0
+    var ones = SIMD[DType.int16, 16](1)
 
     for blk in range(bpr):
         var bo = blk * 144
@@ -697,26 +761,41 @@ def dot_q4_k_q8_k_2rows(
 
             for g in range(2):
                 var j = g * 16
-                var y1_i16 = qs_y.unsafe_load[width=16](s + j).cast[DType.int8]().cast[DType.int16]()
-                var y2_i16 = qs_y.unsafe_load[width=16](s + 32 + j).cast[DType.int8]().cast[DType.int16]()
-                var sum_y1 = y1_i16.cast[DType.int32]().reduce_add()
-                var sum_y2 = y2_i16.cast[DType.int32]().reduce_add()
+                var b_v0 = qs_w0.unsafe_load[width=16](q_off + j)
+                var lo_16_0 = (b_v0 & UInt8(0x0F)).cast[DType.uint8]()
+                var hi_16_0 = (b_v0 >> UInt8(4)).cast[DType.uint8]()
+
+                var b_v1 = qs_w1.unsafe_load[width=16](q_off + j)
+                var lo_16_1 = (b_v1 & UInt8(0x0F)).cast[DType.uint8]()
+                var hi_16_1 = (b_v1 >> UInt8(4)).cast[DType.uint8]()
+
+                var y1_16 = qs_y.unsafe_load[width=16](s + j).cast[DType.int8]()
+                var y2_16 = qs_y.unsafe_load[width=16](s + 32 + j).cast[DType.int8]()
+
+                var y1 = y1_16.join(SIMD[DType.int8, 16](0))
+                var y2 = y2_16.join(SIMD[DType.int8, 16](0))
+                var sum_y1 = y1_16.cast[DType.int32]().reduce_add()
+                var sum_y2 = y2_16.cast[DType.int32]().reduce_add()
 
                 # Row 0
-                var b0_v = qs_w0.unsafe_load[width=16](q_off + j)
-                var lo0_i16 = (b0_v & UInt8(0x0F)).cast[DType.int16]()
-                var hi0_i16 = (b0_v >> UInt8(4)).cast[DType.int16]()
-                var dot1_0 = (lo0_i16 * y1_i16).cast[DType.int32]().reduce_add()
-                var dot2_0 = (hi0_i16 * y2_i16).cast[DType.int32]().reduce_add()
-                sumi0 += (Float32(dot1_0) * d1_0 - Float32(sum_y1) * mm1_0) + (Float32(dot2_0) * d2_0 - Float32(sum_y2) * mm2_0)
+                var p16_1_0 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](lo_16_0.join(SIMD[DType.uint8, 16](0)), y1)
+                var p16_2_0 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](hi_16_0.join(SIMD[DType.uint8, 16](0)), y2)
+                var p32_1_0 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_1_0, ones)
+                var p32_2_0 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_2_0, ones)
+                var dot1_0 = p32_1_0.slice[4, offset=0]().reduce_add()
+                var dot2_0 = p32_2_0.slice[4, offset=0]().reduce_add()
+
+                sumi0 += d1_0 * Float32(dot1_0) - mm1_0 * Float32(sum_y1) + d2_0 * Float32(dot2_0) - mm2_0 * Float32(sum_y2)
 
                 # Row 1
-                var b1_v = qs_w1.unsafe_load[width=16](q_off + j)
-                var lo1_i16 = (b1_v & UInt8(0x0F)).cast[DType.int16]()
-                var hi1_i16 = (b1_v >> UInt8(4)).cast[DType.int16]()
-                var dot1_1 = (lo1_i16 * y1_i16).cast[DType.int32]().reduce_add()
-                var dot2_1 = (hi1_i16 * y2_i16).cast[DType.int32]().reduce_add()
-                sumi1 += (Float32(dot1_1) * d1_1 - Float32(sum_y1) * mm1_1) + (Float32(dot2_1) * d2_1 - Float32(sum_y2) * mm2_1)
+                var p16_1_1 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](lo_16_1.join(SIMD[DType.uint8, 16](0)), y1)
+                var p16_2_1 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](hi_16_1.join(SIMD[DType.uint8, 16](0)), y2)
+                var p32_1_1 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_1_1, ones)
+                var p32_2_1 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_2_1, ones)
+                var dot1_1 = p32_1_1.slice[4, offset=0]().reduce_add()
+                var dot2_1 = p32_2_1.slice[4, offset=0]().reduce_add()
+
+                sumi1 += d1_1 * Float32(dot1_1) - mm1_1 * Float32(sum_y1) + d2_1 * Float32(dot2_1) - mm2_1 * Float32(sum_y2)
 
             is_idx += 2
             q_off += 32
