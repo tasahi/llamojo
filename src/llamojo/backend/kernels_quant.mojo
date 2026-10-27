@@ -1,5 +1,4 @@
-"""Unified Quantized Matrix-Vector and Multi-Matrix Multiplication Kernels.
-
+"""Unified Quantized Matrix-Vector and Multi-Matrix Multiplication Kernels.\n
 Consolidates, ports and optimizes:
 - MojoLlama/src/mojollama/mojo_engine/mojo_quant_kernels.mojo
 - MojoLlama/src/mojollama/kernels/kquants.mojo
@@ -17,7 +16,8 @@ Features:
 
 from std.memory import Pointer, bitcast, stack_allocation
 from std.utils import StaticTuple
-from std.sys.info import simd_width_of
+from std.sys.info import simd_width_of, num_performance_cores
+from max.algorithm import parallelize
 
 from .isa import (
     SIMD_WIDTH,
@@ -565,3 +565,38 @@ def matmul_quant_fused[ n: Int, ](
             var row_w_ptr = W[k].unsafe_offset(r * bytes_per_row)
             var res = dot_quant_row(dtype, row_w_ptr, x, nc)
             C[k][unsafe_offset=r] = res
+
+# ─── Parallel Quantized GEMV ──────────────────────────────────────────────────
+
+@always_inline
+def gemv_quant(
+        dst: FloatPtr,
+        w: BytePtr,
+        dtype: UInt32,
+        x: FloatPtr,
+        rows: Int,
+        cols: Int,
+        workers: Int = 0,
+    ):
+    """ Perform matrix-vector product `dst = w @ x` with multi-threaded row chunking."""
+    var blk_sz = Int(ggml_block_size(dtype))
+    var type_sz = Int(ggml_type_size(dtype))
+    var bpr = (cols // blk_sz) * type_sz
+
+    var n_workers = workers if workers > 0 else num_performance_cores()
+    if n_workers <= 1 or rows < 512:
+        for r in range(rows):
+            var w_row = w.unsafe_offset(r * bpr)
+            dst[unsafe_offset=r] = dot_quant_row(dtype, w_row, x, cols)
+        return
+
+    var chunk = (rows + n_workers - 1) // n_workers
+
+    def worker_fn(wid: Int) {imm}:
+        var r_start = wid * chunk
+        var r_end = min((wid + 1) * chunk, rows)
+        for r in range(r_start, r_end):
+            var w_row = w.unsafe_offset(r * bpr)
+            dst[unsafe_offset=r] = dot_quant_row(dtype, w_row, x, cols)
+
+    parallelize(worker_fn, n_workers, n_workers)

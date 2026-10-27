@@ -44,6 +44,7 @@ from .kernels_attn import gqa_decode
 from .kernels_quant import (
     dot_quant_row,
     dequantize_row,
+    gemv_quant,
 )
 from .models import LayerWeights
 
@@ -118,12 +119,7 @@ def forward_gemma4_single_token(
             ple_tok_buf[unsafe_offset=i] *= tok_embd_scale
 
         # 2b. Context projection: x @ per_layer_model_proj (dim -> ple_total)
-        var blk_sz_proj = Int(ggml_block_size(per_layer_model_proj_type))
-        var type_sz_proj = Int(ggml_type_size(per_layer_model_proj_type))
-        var bpr_proj = (dim // blk_sz_proj) * type_sz_proj
-        for r in range(ple_total):
-            var w_row = per_layer_model_proj.unsafe_offset(r * bpr_proj)
-            ple_proj_buf[unsafe_offset=r] = dot_quant_row(per_layer_model_proj_type, w_row, x, dim)
+        gemv_quant(ple_proj_buf, per_layer_model_proj, per_layer_model_proj_type, x, ple_total, dim)
 
         var proj_scale = Float32(1.0) / sqrt(Float32(dim))
         for i in range(ple_total):
@@ -156,12 +152,7 @@ def forward_gemma4_single_token(
         rms_norm(xb, x, lw.attn_norm, dim, eps)
 
         # --- B. Query Projection ---
-        var blk_sz_q = Int(ggml_block_size(lw.dtype_q))
-        var type_sz_q = Int(ggml_type_size(lw.dtype_q))
-        var bpr_q = (dim // blk_sz_q) * type_sz_q
-        for r in range(q_dim):
-            var w_row = lw.wq.unsafe_offset(r * bpr_q)
-            q[unsafe_offset=r] = dot_quant_row(lw.dtype_q, w_row, xb, dim)
+        gemv_quant(q, lw.wq, lw.dtype_q, xb, q_dim, dim)
 
         # Q per-head RMSNorm
         if Int(lw.attn_q_norm) != 0:
@@ -231,12 +222,7 @@ def forward_gemma4_single_token(
         )
 
         # --- E. Attention Output Projection + Post-Attention Norm + Residual ---
-        var blk_sz_wo = Int(ggml_block_size(lw.dtype_o))
-        var type_sz_wo = Int(ggml_type_size(lw.dtype_o))
-        var bpr_wo = (q_dim // blk_sz_wo) * type_sz_wo
-        for r in range(dim):
-            var w_row = lw.wo.unsafe_offset(r * bpr_wo)
-            xb[unsafe_offset=r] = dot_quant_row(lw.dtype_o, w_row, xb2, q_dim)
+        gemv_quant(xb, lw.wo, lw.dtype_o, xb2, dim, q_dim)
 
         if Int(lw.post_attention_norm) != 0:
             rms_norm(xb, xb, lw.post_attention_norm, dim, eps)
@@ -249,29 +235,13 @@ def forward_gemma4_single_token(
         var hidden_dim = 6144 if l < 15 else 12288
         rms_norm(xb, x, lw.ffn_norm, dim, eps)
 
-        var blk_sz_g = Int(ggml_block_size(lw.dtype_gate))
-        var type_sz_g = Int(ggml_type_size(lw.dtype_gate))
-        var bpr_g = (dim // blk_sz_g) * type_sz_g
-        for r in range(hidden_dim):
-            var w_row = lw.w_gate.unsafe_offset(r * bpr_g)
-            hb[unsafe_offset=r] = dot_quant_row(lw.dtype_gate, w_row, xb, dim)
-
-        var blk_sz_u = Int(ggml_block_size(lw.dtype_up))
-        var type_sz_u = Int(ggml_type_size(lw.dtype_up))
-        var bpr_u = (dim // blk_sz_u) * type_sz_u
-        for r in range(hidden_dim):
-            var w_row = lw.w_up.unsafe_offset(r * bpr_u)
-            hb2[unsafe_offset=r] = dot_quant_row(lw.dtype_up, w_row, xb, dim)
+        gemv_quant(hb, lw.w_gate, lw.dtype_gate, xb, hidden_dim, dim)
+        gemv_quant(hb2, lw.w_up, lw.dtype_up, xb, hidden_dim, dim)
 
         for i in range(hidden_dim):
             fused_gelu_mul(hb.unsafe_offset(i), hb2.unsafe_offset(i), hb.unsafe_offset(i), 1)
 
-        var blk_sz_d = Int(ggml_block_size(lw.dtype_down))
-        var type_sz_d = Int(ggml_type_size(lw.dtype_down))
-        var bpr_d = (hidden_dim // blk_sz_d) * type_sz_d
-        for r in range(dim):
-            var w_row = lw.w_down.unsafe_offset(r * bpr_d)
-            xb[unsafe_offset=r] = dot_quant_row(lw.dtype_down, w_row, hb, hidden_dim)
+        gemv_quant(xb, lw.w_down, lw.dtype_down, hb, dim, hidden_dim)
 
         if Int(lw.post_ffw_norm) != 0:
             rms_norm(xb, xb, lw.post_ffw_norm, dim, eps)
