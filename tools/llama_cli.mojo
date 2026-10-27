@@ -7,6 +7,7 @@ Usage:
 from std.sys import argv
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
+from std.time import perf_counter_ns
 
 from llamojo import (
     null_ptr,
@@ -45,7 +46,7 @@ from llamojo import (
     llama_sampler_params,
 )
 
-def main():
+def main() raises:
     var args = argv()
     var model_path = "test_model.gguf"
     var prompt = "Once upon a time"
@@ -92,6 +93,7 @@ def main():
     print("Max tokens:", n_predict)
     print("Temperature:", temp)
 
+    var t_start = perf_counter_ns()
     llama_backend_init()
 
     var mparams = llama_model_default_params()
@@ -109,6 +111,9 @@ def main():
         llama_model_free(model)
         llama_backend_free()
         return
+    var t_loaded = perf_counter_ns()
+    var load_time_ms = Int((t_loaded - t_start) / 1000000)
+    print("Model loaded in:", String(Float64(load_time_ms) / 1000.0), "s")
 
     # Setup vocabulary from model GGUF context
     var vocab = unsafe_alloc[llama_vocab](1)
@@ -148,12 +153,14 @@ def main():
 
     # Generation loop
     print("\n--- Output ---")
+    var t_gen_start = perf_counter_ns()
+    var gen_tokens_count = 0
     for step in range(n_predict):
         var logits = llama_get_logits_ith(ctx, 0)
         if Int(logits) == 0:
             break
 
-        var next_tok: llama_token = -1
+        var next_tok: llama_token
         if temp <= 0.0:
             var best_id = 0
             var max_val = logits[unsafe_offset=0]
@@ -177,6 +184,7 @@ def main():
         if next_tok < 0 or llama_vocab_is_eog(vocab, next_tok):
             break
 
+        gen_tokens_count += 1
         var plen = llama_token_to_piece(vocab, next_tok, piece_buf, 256)
         if plen > 0:
             var piece_str = String(unsafe_from_utf8=Span(unsafe_ptr=piece_buf, length=Int(plen)))
@@ -189,7 +197,12 @@ def main():
         _ = llama_decode(ctx, b)
         llama_batch_free(b)
 
+    var t_gen_end = perf_counter_ns()
+    var gen_time_ms = Int((t_gen_end - t_gen_start) / 1000000)
+    var tps = (Float64(gen_tokens_count) / (Float64(gen_time_ms) / 1000.0)) if gen_time_ms > 0 else 0.0
     print("\n--- End of Generation ---")
+    print("Generated tokens :", gen_tokens_count)
+    print("Generation time  :", gen_time_ms, "ms (" + String(tps) + " tok/s)")
 
     candidates_buf.unsafe_free()
     piece_buf.unsafe_free()
