@@ -3,3 +3,4 @@ vendor/MojoLlama
 build/**
 build/libllama.so
 data/
+__pycache__/
