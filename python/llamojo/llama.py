@@ -47,6 +47,97 @@ class Llama:
     Mirrors the `llama_cpp.Llama` API closely for drop-in compatibility.
     """
 
+    @classmethod
+    def from_pretrained(
+            cls,
+            repo_id: str,
+            filename: Optional[str] = None,
+            *args: Any,
+            **kwargs: Any,
+        ) -> "Llama":
+        """Download a .gguf model from Hugging Face Hub and load it.\n
+        Matches llama_cpp.Llama.from_pretrained.
+
+        Args:
+            repo_id: The Hugging Face repo ID (e.g. "mradermacher/SmolLM2-135M-Instruct-GGUF"
+                or "Qwen/Qwen2.5-0.5B-Instruct-GGUF").
+            filename: The specific GGUF filename (e.g. "SmolLM2-135M-Instruct-Q4_K_M.gguf")
+                or a glob pattern (e.g. "*q4_k_m.gguf"). If omitted, attempts to find
+                the most appropriate .gguf file in the repository.
+            *args: Additional arguments passed to Llama.__init__.
+            **kwargs: Additional keyword arguments. Hugging Face hub options like
+                `cache_dir`, `local_dir`, `token`, `revision` are forwarded to
+                `hf_hub_download`; remaining kwargs are forwarded to Llama.__init__.
+        """
+        try:
+            from huggingface_hub import hf_hub_download, list_repo_files
+        except ImportError as e:
+            raise ImportError(
+                "huggingface_hub is required for Llama.from_pretrained. "
+                "Please install it with: pip install huggingface-hub"
+            ) from e
+
+        # Extract hf_hub_download parameters
+        hf_kwargs = {}
+        for key in [
+            "subfolder",
+            "repo_type",
+            "revision",
+            "token",
+            "cache_dir",
+            "local_dir",
+            "force_download",
+            "resume_download",
+            "proxies",
+            "etag_timeout",
+            "headers",
+            "endpoint",
+        ]:
+            if key in kwargs:
+                hf_kwargs[key] = kwargs.pop(key)
+
+        token = hf_kwargs.get("token")
+        revision = hf_kwargs.get("revision")
+
+        # Resolve filename if None or contains wildcards
+        if filename is None:
+            files = list_repo_files(repo_id=repo_id, revision=revision, token=token)
+            gguf_files = [f for f in files if f.endswith(".gguf")]
+            if not gguf_files:
+                raise ValueError(f"No .gguf files found in Hugging Face repository '{repo_id}'")
+            if len(gguf_files) == 1:
+                filename = gguf_files[0]
+            else:
+                # Prioritize Q4_K_M or Q4_0 if multiple variants exist
+                preferred = None
+                for candidate in ["*q4_k_m*.gguf", "*q4_0*.gguf", "*q8_0*.gguf"]:
+                    import fnmatch
+                    matches = [f for f in gguf_files if fnmatch.fnmatch(f.lower(), candidate)]
+                    if matches:
+                        preferred = matches[0]
+                        break
+                filename = preferred or gguf_files[0]
+        elif any(c in filename for c in ["*", "?", "["]):
+            import fnmatch
+            files = list_repo_files(repo_id=repo_id, revision=revision, token=token)
+            matches = [f for f in files if fnmatch.fnmatch(f, filename)]
+            if not matches:
+                # Try case-insensitive matching
+                matches = [f for f in files if fnmatch.fnmatch(f.lower(), filename.lower())]
+            if not matches:
+                raise ValueError(
+                    f"Pattern '{filename}' did not match any files in '{repo_id}'"
+                )
+            filename = matches[0]
+
+        model_path = hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            **hf_kwargs,
+        )
+
+        return cls(model_path=model_path, *args, **kwargs)
+
     def __init__( self,
             model_path: str,
             n_ctx: int = 512,

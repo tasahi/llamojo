@@ -57,7 +57,20 @@ class TestLlamojoPython(unittest.TestCase):
         self.assertEqual(res["choices"][0]["message"]["role"], "assistant")
         self.assertIsInstance(res["choices"][0]["message"]["content"], str)
 
+    def test_from_pretrained(self):
+        from unittest.mock import patch
+        with patch("huggingface_hub.list_repo_files") as mock_list, \
+             patch("huggingface_hub.hf_hub_download") as mock_download:
+            mock_list.return_value = ["SmolLM2-135M-Instruct-Q4_K_M.gguf"]
+            mock_download.return_value = MODEL_PATH
+            llm = Llama.from_pretrained("HuggingFaceTB/SmolLM2-135M-Instruct-GGUF", filename="*Q4_K_M.gguf", n_ctx=128)
+            try:
+                self.assertIsNotNone(llm)
+                self.assertEqual(llm.model_path, os.path.abspath(MODEL_PATH))
+                mock_list.assert_called_once()
+                mock_download.assert_called_once()
+            finally:
+                llm.close()
 
 if __name__ == "__main__":
     unittest.main()
-
