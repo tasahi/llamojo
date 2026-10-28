@@ -57,6 +57,20 @@ class TestLlamojoPython(unittest.TestCase):
         self.assertEqual(res["choices"][0]["message"]["role"], "assistant")
         self.assertIsInstance(res["choices"][0]["message"]["content"], str)
 
+    def test_context_and_model_properties(self):
+        # Attribute access
+        self.assertEqual(self.llm.n_ctx, 256)
+        self.assertGreater(self.llm.n_embd, 0)
+        self.assertGreater(self.llm.n_vocab, 0)
+        # Callable method access (parity with llama_cpp.Llama)
+        self.assertEqual(self.llm.n_ctx(), 256)
+        self.assertGreater(self.llm.n_embd(), 0)
+        self.assertGreater(self.llm.n_vocab(), 0)
+        self.assertIsNotNone(self.llm.model)
+        self.assertIsNotNone(self.llm.ctx)
+        self.llm.set_seed(4242)
+        self.assertEqual(self.llm.seed, 4242)
+
     def test_from_pretrained(self):
         from unittest.mock import patch
         with patch("huggingface_hub.list_repo_files") as mock_list, \

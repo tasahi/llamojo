@@ -10,6 +10,16 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 from ._lib import get_lib
 
 
+class _CallableInt(int):
+    """ Integer that can also be called as a zero-argument function.\n
+    Provides dual compatibility with both property-style access (`llm.n_ctx`)
+    and upstream llama-cpp-python method-style access (`llm.n_ctx()`).
+    """
+
+    def __call__(self) -> int:
+        return int(self)
+
+
 class LlamaGrammar:
     """ GBNF Grammar constraint parser matching llama_cpp.LlamaGrammar."""
 
@@ -55,7 +65,7 @@ class Llama:
             *args: Any,
             **kwargs: Any,
         ) -> "Llama":
-        """Download a .gguf model from Hugging Face Hub and load it.\n
+        """ Download a .gguf model from Hugging Face Hub and load it.\n
         Matches llama_cpp.Llama.from_pretrained.
 
         Args:
@@ -150,10 +160,11 @@ class Llama:
             **kwargs: Any,
         ):
         self.model_path = os.path.abspath(model_path)
-        self.n_ctx = n_ctx
-        self.n_batch = n_batch
-        self.n_threads = n_threads or 2
+        self._n_ctx = n_ctx
+        self._n_batch = n_batch
+        self._n_threads = n_threads or 2
         self.verbose = verbose
+        self.seed = kwargs.get("seed", 42)
 
         self._lib = get_lib()
 
@@ -174,17 +185,43 @@ class Llama:
             raise RuntimeError("Failed to extract model vocabulary")
 
         self._ctx = self._lib.llama_init_from_model(
-            self._model, self.n_ctx, self.n_batch, self.n_threads
+            self._model, self._n_ctx, self._n_batch, self._n_threads
         )
         if not self._ctx:
             self._lib.llama_vocab_free(self._vocab)
             self._lib.llama_model_free(self._model)
             raise RuntimeError("Failed to create inference context")
 
-        self.n_vocab = self._lib.llama_model_n_vocab(self._model)
-        self.n_embd = self._lib.llama_model_n_embd(self._model)
-        self.n_layer = self._lib.llama_model_n_layer(self._model)
-        self.n_head = self._lib.llama_model_n_head(self._model)
+        self._n_vocab = self._lib.llama_model_n_vocab(self._model)
+        self._n_embd = self._lib.llama_model_n_embd(self._model)
+        self._n_layer = self._lib.llama_model_n_layer(self._model)
+        self._n_head = self._lib.llama_model_n_head(self._model)
+
+        # Dual property/method compatibility
+        self.n_ctx = _CallableInt(self._n_ctx)
+        self.n_batch = _CallableInt(self._n_batch)
+        self.n_threads = _CallableInt(self._n_threads)
+        self.n_vocab = _CallableInt(self._n_vocab)
+        self.n_embd = _CallableInt(self._n_embd)
+        self.n_layer = _CallableInt(self._n_layer)
+        self.n_head = _CallableInt(self._n_head)
+
+    @property
+    def model(self):
+        """ Return the underlying model pointer."""
+        return self._model
+
+    @property
+    def ctx(self):
+        """ Return the underlying context pointer."""
+        return self._ctx
+
+    def set_seed(self, seed: int):
+        """ Set the random seed.\n
+        Args:
+            seed: The random seed.
+        """
+        self.seed = seed
 
     def __del__(self):
         self.close()

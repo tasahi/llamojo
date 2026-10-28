@@ -20,6 +20,7 @@ Through automated reflection across `llama_cpp.Llama` and `llamojo.Llama`, we id
 | **GBNF Grammar Constraints (`LlamaGrammar`)** | Yes | **Full** | C-ABI backed GBNF parser, bitmask filtering, pushdown automaton state advancement. |
 | **LoRA Adapters (`lora_path`, `apply_lora`)** | Yes | **Full** | Ingestion of GGUF adapter pairs and online additive weight merging. |
 | **HuggingFace Hub Ingestion (`Llama.from_pretrained`)** | Yes | **Full** | High convenience utility for downloading `.gguf` files via `huggingface-hub`. |
+| **Context / Model Properties (`n_ctx()`, `n_embd()`, `n_vocab()`)** | Yes | **Full** | Dual support as both properties (`llm.n_ctx`) and callable zero-arg methods (`llm.n_ctx()`), plus `model`, `ctx`, and `set_seed`. |
 | **KV Cache Serialization (`save_state`, `load_state`)** | Yes | **Pending** | Persisting and restoring KV cache state between turns or process restarts. |
 | **Model Chat Template Engines (Jinja2 / GGUF metadata templates)** | Yes | **Partial** | `llamojo` currently defaults to standard ChatML; lacks dynamic Jinja2 template rendering from GGUF metadata. |
 | **Context / Model Properties (`n_ctx()`, `n_embd()`, `n_vocab()`)** | Yes | **Partial** | Exposed as instance variables (`llm.n_ctx`) rather than zero-arg accessor methods (`llm.n_ctx()`). |
