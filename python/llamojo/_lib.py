@@ -1,4 +1,4 @@
-"""Low-level ctypes bindings for libllamojo.so."""
+""" Low-level ctypes bindings for libllamojo.so."""
 
 import ctypes
 import os
@@ -218,4 +218,3 @@ def get_lib() -> ctypes.CDLL:
     lib.llama_backend_init()
     _lib = lib
     return _lib
-

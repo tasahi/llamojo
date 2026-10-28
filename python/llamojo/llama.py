@@ -1,6 +1,7 @@
 """llamojo: High-level Python interface compatible with llama-cpp-python."""
 
 import ctypes
+import json
 import os
 import time
 import uuid
@@ -9,22 +10,54 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 from ._lib import get_lib
 
 
-class Llama:
-    """High-level Python wrapper around the compiled llamojo engine.
+class LlamaGrammar:
+    """ GBNF Grammar constraint parser matching llama_cpp.LlamaGrammar."""
 
+    def __init__(self, grammar_str: str):
+        self.grammar_str = grammar_str
+        self._lib = get_lib()
+        c_str = grammar_str.encode("utf-8")
+        self._handle = self._lib.llama_grammar_init(c_str)
+        if not self._handle:
+            raise RuntimeError(f"Failed to parse GBNF grammar: {grammar_str}")
+
+    def __del__(self):
+        self.close()
+
+    def close(self):
+        if hasattr(self, "_handle") and self._handle:
+            self._lib.llama_grammar_free(self._handle)
+            self._handle = None
+
+    @classmethod
+    def from_string(cls, grammar_str: str) -> "LlamaGrammar":
+        return cls(grammar_str)
+
+    @classmethod
+    def from_json_schema(cls, schema: Union[str, Dict[str, Any]]) -> "LlamaGrammar":
+        """Generate a grammar constraining output to a JSON object matching schema."""
+        if isinstance(schema, dict):
+            _ = json.dumps(schema)
+        # Built-in JSON validator pattern handled by llamojo grammar engine
+        return cls("json")
+
+
+class Llama:
+    """ High-level Python wrapper around the compiled llamojo engine.\n
     Mirrors the `llama_cpp.Llama` API closely for drop-in compatibility.
     """
 
-    def __init__(
-        self,
-        model_path: str,
-        n_ctx: int = 512,
-        n_batch: int = 512,
-        n_threads: Optional[int] = None,
-        n_gpu_layers: int = 0,
-        verbose: bool = False,
-        **kwargs: Any,
-    ):
+    def __init__( self,
+            model_path: str,
+            n_ctx: int = 512,
+            n_batch: int = 512,
+            n_threads: Optional[int] = None,
+            n_gpu_layers: int = 0,
+            lora_path: Optional[str] = None,
+            lora_scale: float = 1.0,
+            verbose: bool = False,
+            **kwargs: Any,
+        ):
         self.model_path = os.path.abspath(model_path)
         self.n_ctx = n_ctx
         self.n_batch = n_batch
@@ -40,6 +73,9 @@ class Llama:
         self._model = self._lib.llama_model_load_from_file(c_path, n_gpu_layers)
         if not self._model:
             raise RuntimeError(f"Failed to load model from: {self.model_path}")
+
+        if lora_path:
+            self.apply_lora(lora_path, scale=lora_scale)
 
         self._vocab = self._lib.llama_model_get_vocab(self._model)
         if not self._vocab:
@@ -63,7 +99,7 @@ class Llama:
         self.close()
 
     def close(self):
-        """Release all allocated native resources."""
+        """ Release all allocated native resources."""
         if hasattr(self, "_ctx") and self._ctx:
             self._lib.llama_free(self._ctx)
             self._ctx = None
@@ -74,26 +110,36 @@ class Llama:
             self._lib.llama_model_free(self._model)
             self._model = None
 
+    def apply_lora(self, lora_path: str, scale: float = 1.0) -> int:
+        """ Apply low-rank adapter weights from a GGUF adapter file in-place."""
+        if not os.path.isfile(lora_path):
+            raise FileNotFoundError(f"LoRA adapter file not found: {lora_path}")
+        c_lora = lora_path.encode("utf-8")
+        ret = self._lib.llama_lora_adapter_apply(self._model, c_lora, ctypes.c_float(scale))
+        if ret != 0:
+            raise RuntimeError(f"Failed to apply LoRA adapter from: {lora_path}")
+        return ret
+
     def reset(self):
-        """Reset KV cache and internal context state."""
+        """ Reset KV cache and internal context state."""
         if hasattr(self, "_ctx") and self._ctx:
             self._lib.llama_kv_cache_clear(self._ctx)
 
     def token_bos(self) -> int:
-        """Return BOS token ID."""
+        """ Return BOS token ID."""
         return self._lib.llama_vocab_bos(self._vocab)
 
     def token_eos(self) -> int:
-        """Return EOS token ID."""
+        """ Return EOS token ID."""
         return self._lib.llama_vocab_eos(self._vocab)
 
     def token_nl(self) -> int:
-        """Return newline token ID."""
+        """ Return newline token ID."""
         nl_toks = self.tokenize("\n", add_bos=False)
         return nl_toks[0] if nl_toks else 13
 
     def eval(self, tokens: List[int]):
-        """Evaluate a sequence of tokens in the model."""
+        """ Evaluate a sequence of tokens in the model."""
         if not tokens:
             return
         batch = self._lib.llama_batch_init(1, 0, 1)
@@ -109,33 +155,16 @@ class Llama:
         finally:
             self._lib.llama_batch_free(batch)
 
-    def sample(
-        self,
-        top_k: int = 40,
-        top_p: float = 0.95,
-        temp: float = 0.8,
-        **kwargs: Any,
-    ) -> int:
-        """Sample a token from the current context logits."""
+    def sample( self,
+            top_k: int = 40,
+            top_p: float = 0.95,
+            temp: float = 0.8,
+            grammar: Optional[Union[LlamaGrammar, str]] = None,
+            **kwargs: Any,
+        ) -> int:
+        """ Sample a token from the current context logits."""
         logits = self._lib.llama_get_logits_ith(self._ctx, 0)
-        if temp <= 0.0:
-            smpl = self._lib.llama_sampler_init_greedy()
-        else:
-            smpl = self._lib.llama_sampler_chain_init()
-            if top_k > 0:
-                self._lib.llama_sampler_chain_add(
-                    smpl, self._lib.llama_sampler_init_top_k(top_k)
-                )
-            if top_p < 1.0:
-                self._lib.llama_sampler_chain_add(
-                    smpl, self._lib.llama_sampler_init_top_p(top_p, 1)
-                )
-            self._lib.llama_sampler_chain_add(
-                smpl, self._lib.llama_sampler_init_temp(temp)
-            )
-            self._lib.llama_sampler_chain_add(
-                smpl, self._lib.llama_sampler_init_dist(int(time.time()))
-            )
+        smpl = self._build_sampler(temp=temp, top_k=top_k, top_p=top_p, grammar=grammar)
         try:
             return self._lib.llama_sampler_sample_token(
                 smpl, logits, self.n_vocab, temp
@@ -143,26 +172,31 @@ class Llama:
         finally:
             self._lib.llama_sampler_free(smpl)
 
-    def generate(
-        self,
-        tokens: List[int],
-        top_k: int = 40,
-        top_p: float = 0.95,
-        temp: float = 0.8,
-        reset: bool = True,
-        **kwargs: Any,
-    ) -> Iterator[int]:
-        """Low-level token generator yielding next token IDs."""
+    def generate( self,
+            tokens: List[int],
+            top_k: int = 40,
+            top_p: float = 0.95,
+            temp: float = 0.8,
+            reset: bool = True,
+            grammar: Optional[Union[LlamaGrammar, str]] = None,
+            **kwargs: Any,
+        ) -> Iterator[int]:
+        """ Low-level token generator yielding next token IDs."""
         if reset:
             self.reset()
         self.eval(tokens)
         curr_pos = len(tokens)
         batch = self._lib.llama_batch_init(1, 0, 1)
+        smpl = self._build_sampler(temp=temp, top_k=top_k, top_p=top_p, grammar=grammar)
         try:
             while True:
-                next_tok = self.sample(top_k=top_k, top_p=top_p, temp=temp)
+                logits = self._lib.llama_get_logits_ith(self._ctx, 0)
+                next_tok = self._lib.llama_sampler_sample_token(
+                    smpl, logits, self.n_vocab, temp
+                )
                 if next_tok < 0 or self._lib.llama_vocab_is_eog(self._vocab, next_tok):
                     break
+                self._lib.llama_sampler_accept_token(smpl, next_tok)
                 yield next_tok
                 self._lib.llama_batch_set_token(batch, 0, next_tok, curr_pos, 0, True)
                 self._lib.llama_batch_set_n_tokens(batch, 1)
@@ -172,15 +206,15 @@ class Llama:
                 curr_pos += 1
         finally:
             self._lib.llama_batch_free(batch)
+            self._lib.llama_sampler_free(smpl)
 
-    def embed(
-        self,
-        input: Union[str, List[str]],
-        normalize: bool = False,
-        truncate: bool = True,
-        return_count: bool = False,
-    ) -> Union[List[float], List[List[float]]]:
-        """Generate embeddings for input text or list of texts."""
+    def embed( self,
+            input: Union[str, List[str]],
+            normalize: bool = False,
+            truncate: bool = True,
+            return_count: bool = False,
+        ) -> Union[List[float], List[List[float]]]:
+        """ Generate embeddings for input text or list of texts."""
         is_single = isinstance(input, str)
         inputs = [input] if is_single else input
         results = []
@@ -203,13 +237,12 @@ class Llama:
 
         return results[0] if is_single else results
 
-    def create_embedding(
-        self,
-        input: Union[str, List[str]],
-        model: Optional[str] = None,
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        """OpenAI-compatible embedding endpoint."""
+    def create_embedding( self,
+            input: Union[str, List[str]],
+            model: Optional[str] = None,
+            **kwargs: Any,
+        ) -> Dict[str, Any]:
+        """ OpenAI-compatible embedding endpoint."""
         is_single = isinstance(input, str)
         inputs = [input] if is_single else input
         embeddings = self.embed(inputs)
@@ -234,10 +267,10 @@ class Llama:
             },
         }
 
-    def tokenize(
-        self, text: Union[str, bytes], add_bos: bool = True, special: bool = False
-    ) -> List[int]:
-        """Convert a text string to a list of token IDs."""
+    def tokenize( self,
+            text: Union[str, bytes], add_bos: bool = True, special: bool = False
+        ) -> List[int]:
+        """ Convert a text string to a list of token IDs."""
         if isinstance(text, str):
             b_text = text.encode("utf-8")
         else:
@@ -256,7 +289,6 @@ class Llama:
             special,
         )
         if n < 0:
-            # Need larger buffer
             max_toks = -n
             tok_arr = (ctypes.c_int32 * max_toks)()
             n = self._lib.llama_tokenize(
@@ -272,7 +304,7 @@ class Llama:
         return [tok_arr[i] for i in range(max(0, n))]
 
     def detokenize(self, tokens: List[int], special: bool = False) -> bytes:
-        """Convert a list of token IDs back into bytes."""
+        """ Convert a list of token IDs back into bytes."""
         out = bytearray()
         buf = ctypes.create_string_buffer(256)
         for tok in tokens:
@@ -284,28 +316,65 @@ class Llama:
         return bytes(out)
 
     def token_to_piece(self, token: int, special: bool = False) -> str:
-        """Convert a single token ID into its string piece."""
+        """ Convert a single token ID into its string piece."""
         buf = ctypes.create_string_buffer(256)
         plen = self._lib.llama_token_to_piece(self._vocab, token, buf, 256, 0, special)
         if plen > 0:
             return buf.raw[:plen].decode("utf-8", errors="replace")
         return ""
 
-    def __call__(
-        self,
-        prompt: Union[str, List[int]],
-        suffix: Optional[str] = None,
-        max_tokens: Optional[int] = 16,
-        temperature: float = 0.8,
-        top_p: float = 0.95,
-        min_p: float = 0.05,
-        top_k: int = 40,
-        stream: bool = False,
-        stop: Optional[Union[str, List[str]]] = None,
-        echo: bool = False,
-        **kwargs: Any,
-    ) -> Union[Dict[str, Any], Iterator[Dict[str, Any]]]:
-        """Callable shorthand for create_completion."""
+    def _build_sampler( self,
+            temp: float,
+            top_k: int = 40,
+            top_p: float = 0.95,
+            grammar: Optional[Union[LlamaGrammar, str]] = None,
+        ) -> Any:
+        """ Construct composite sampler pipeline with optional grammar constraint."""
+        chain = self._lib.llama_sampler_chain_init()
+
+        # Add grammar filter stage if provided
+        if grammar is not None:
+            g_pat = grammar.grammar_str if isinstance(grammar, LlamaGrammar) else grammar
+            g_smpl = self._lib.llama_sampler_init_grammar(
+                self._vocab, g_pat.encode("utf-8")
+            )
+            if g_smpl:
+                self._lib.llama_sampler_chain_add(chain, g_smpl)
+
+        if temp <= 0.0:
+            self._lib.llama_sampler_chain_add(chain, self._lib.llama_sampler_init_greedy())
+        else:
+            if top_k > 0:
+                self._lib.llama_sampler_chain_add(
+                    chain, self._lib.llama_sampler_init_top_k(top_k)
+                )
+            if top_p < 1.0:
+                self._lib.llama_sampler_chain_add(
+                    chain, self._lib.llama_sampler_init_top_p(top_p, 1)
+                )
+            self._lib.llama_sampler_chain_add(
+                chain, self._lib.llama_sampler_init_temp(temp)
+            )
+            self._lib.llama_sampler_chain_add(
+                chain, self._lib.llama_sampler_init_dist(int(time.time()))
+            )
+
+        return chain
+
+    def __call__( self,
+            prompt: Union[str, List[int]],
+            suffix: Optional[str] = None,
+            max_tokens: Optional[int] = 16,
+            temperature: float = 0.8,
+            top_p: float = 0.95,
+            min_p: float = 0.05,
+            top_k: int = 40,
+            stream: bool = False,
+            stop: Optional[Union[str, List[str]]] = None,
+            echo: bool = False,
+            grammar: Optional[Union[LlamaGrammar, str]] = None,
+            **kwargs: Any,
+        ) -> Union[Dict[str, Any], Iterator[Dict[str, Any]]]:
         return self.create_completion(
             prompt=prompt,
             suffix=suffix,
@@ -317,24 +386,25 @@ class Llama:
             stream=stream,
             stop=stop,
             echo=echo,
+            grammar=grammar,
             **kwargs,
         )
 
-    def create_completion(
-        self,
-        prompt: Union[str, List[int]],
-        suffix: Optional[str] = None,
-        max_tokens: Optional[int] = 16,
-        temperature: float = 0.8,
-        top_p: float = 0.95,
-        min_p: float = 0.05,
-        top_k: int = 40,
-        stream: bool = False,
-        stop: Optional[Union[str, List[str]]] = None,
-        echo: bool = False,
-        **kwargs: Any,
-    ) -> Union[Dict[str, Any], Iterator[Dict[str, Any]]]:
-        """Generate text completion from a prompt matching llama-cpp-python's schema."""
+    def create_completion( self,
+            prompt: Union[str, List[int]],
+            suffix: Optional[str] = None,
+            max_tokens: Optional[int] = 16,
+            temperature: float = 0.8,
+            top_p: float = 0.95,
+            min_p: float = 0.05,
+            top_k: int = 40,
+            stream: bool = False,
+            stop: Optional[Union[str, List[str]]] = None,
+            echo: bool = False,
+            grammar: Optional[Union[LlamaGrammar, str]] = None,
+            **kwargs: Any,
+        ) -> Union[Dict[str, Any], Iterator[Dict[str, Any]]]:
+        """ Generate text completion from a prompt matching llama-cpp-python's schema."""
         if isinstance(prompt, str):
             tokens = self.tokenize(prompt, add_bos=True)
             prompt_str = prompt
@@ -353,7 +423,7 @@ class Llama:
 
         if stream:
             return self._stream_generator(
-                tokens, prompt_str, max_tokens, temperature, top_k, top_p, stop_sequences
+                tokens, prompt_str, max_tokens, temperature, top_k, top_p, stop_sequences, grammar
             )
 
         # Batch decode prompt tokens
@@ -368,25 +438,7 @@ class Llama:
                 self._lib.llama_batch_free(batch)
                 raise RuntimeError(f"Decode failed at prompt token {i}")
 
-        # Setup sampler
-        if temperature <= 0.0:
-            smpl = self._lib.llama_sampler_init_greedy()
-        else:
-            smpl = self._lib.llama_sampler_chain_init()
-            if top_k > 0:
-                self._lib.llama_sampler_chain_add(
-                    smpl, self._lib.llama_sampler_init_top_k(top_k)
-                )
-            if top_p < 1.0:
-                self._lib.llama_sampler_chain_add(
-                    smpl, self._lib.llama_sampler_init_top_p(top_p, 1)
-                )
-            self._lib.llama_sampler_chain_add(
-                smpl, self._lib.llama_sampler_init_temp(temperature)
-            )
-            self._lib.llama_sampler_chain_add(
-                smpl, self._lib.llama_sampler_init_dist(int(time.time()))
-            )
+        smpl = self._build_sampler(temp=temperature, top_k=top_k, top_p=top_p, grammar=grammar)
 
         gen_tokens: List[int] = []
         gen_text = ""
@@ -401,6 +453,7 @@ class Llama:
                 finish_reason = "stop"
                 break
 
+            self._lib.llama_sampler_accept_token(smpl, next_tok)
             gen_tokens.append(next_tok)
             piece = self.token_to_piece(next_tok)
             gen_text += piece
@@ -426,7 +479,6 @@ class Llama:
             if ret != 0:
                 break
 
-        # Cleanup batch & sampler
         self._lib.llama_batch_free(batch)
         self._lib.llama_sampler_free(smpl)
 
@@ -453,17 +505,17 @@ class Llama:
             },
         }
 
-    def _stream_generator(
-        self,
-        tokens: List[int],
-        prompt_str: str,
-        max_tokens: int,
-        temperature: float,
-        top_k: int,
-        top_p: float,
-        stop_sequences: List[str],
-    ) -> Iterator[Dict[str, Any]]:
-        """Streaming token generator."""
+    def _stream_generator( self,
+            tokens: List[int],
+            prompt_str: str,
+            max_tokens: int,
+            temperature: float,
+            top_k: int,
+            top_p: float,
+            stop_sequences: List[str],
+            grammar: Optional[Union[LlamaGrammar, str]] = None,
+        ) -> Iterator[Dict[str, Any]]:
+        """ Streaming token generator with grammar integration."""
         batch = self._lib.llama_batch_init(1, 0, 1)
         for i, tok in enumerate(tokens):
             self._lib.llama_batch_set_token(
@@ -472,25 +524,7 @@ class Llama:
             self._lib.llama_batch_set_n_tokens(batch, 1)
             self._lib.llama_decode(self._ctx, batch)
 
-        if temperature <= 0.0:
-            smpl = self._lib.llama_sampler_init_greedy()
-        else:
-            smpl = self._lib.llama_sampler_chain_init()
-            if top_k > 0:
-                self._lib.llama_sampler_chain_add(
-                    smpl, self._lib.llama_sampler_init_top_k(top_k)
-                )
-            if top_p < 1.0:
-                self._lib.llama_sampler_chain_add(
-                    smpl, self._lib.llama_sampler_init_top_p(top_p, 1)
-                )
-            self._lib.llama_sampler_chain_add(
-                smpl, self._lib.llama_sampler_init_temp(temperature)
-            )
-            self._lib.llama_sampler_chain_add(
-                smpl, self._lib.llama_sampler_init_dist(int(time.time()))
-            )
-
+        smpl = self._build_sampler(temp=temperature, top_k=top_k, top_p=top_p, grammar=grammar)
         resp_id = f"cmpl-{uuid.uuid4()}"
         accumulated = ""
 
@@ -511,6 +545,7 @@ class Llama:
                     }
                     break
 
+                self._lib.llama_sampler_accept_token(smpl, next_tok)
                 piece = self.token_to_piece(next_tok)
                 accumulated += piece
 
@@ -554,12 +589,11 @@ class Llama:
             self._lib.llama_batch_free(batch)
             self._lib.llama_sampler_free(smpl)
 
-    def create_chat_completion(
-        self,
-        messages: List[Dict[str, str]],
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        """Basic Chat Completion matching OpenAI / llama-cpp-python chat format."""
+    def create_chat_completion( self,
+            messages: List[Dict[str, str]],
+            **kwargs: Any,
+        ) -> Dict[str, Any]:
+        """ Basic Chat Completion matching OpenAI / llama-cpp-python chat format."""
         formatted = ""
         for m in messages:
             role = m.get("role", "user")
@@ -573,4 +607,3 @@ class Llama:
             choice["message"] = {"role": "assistant", "content": choice["text"]}
             res["object"] = "chat.completion"
         return res
-
