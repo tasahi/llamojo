@@ -149,6 +149,12 @@ def get_lib() -> ctypes.CDLL:
     lib.llama_get_logits_ith.argtypes = [ctypes.c_void_p, ctypes.c_int32]
     lib.llama_get_logits_ith.restype = ctypes.POINTER(ctypes.c_float)
 
+    lib.llama_get_embeddings.argtypes = [ctypes.c_void_p]
+    lib.llama_get_embeddings.restype = ctypes.POINTER(ctypes.c_float)
+
+    lib.llama_kv_cache_clear.argtypes = [ctypes.c_void_p]
+    lib.llama_kv_cache_clear.restype = None
+
     # Samplers
     lib.llama_sampler_chain_init.argtypes = []
     lib.llama_sampler_chain_init.restype = ctypes.c_void_p

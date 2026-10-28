@@ -27,6 +27,8 @@ from llamojo import (
     llama_batch_free as _batch_free,
     llama_decode as _decode,
     llama_get_logits_ith as _get_logits_ith,
+    llama_get_embeddings as _get_embeddings,
+    llama_kv_cache_clear as _kv_cache_clear,
     llama_model_n_vocab as _model_n_vocab,
     llama_model_n_ctx_train as _model_n_ctx_train,
     llama_model_n_embd as _model_n_embd,
@@ -302,6 +304,19 @@ def llama_get_logits_ith(ctx: llama_context_p, i: Int32) abi("c") -> FloatPtr:
     if Int(ctx) == 0:
         return null_ptr[Float32]()
     return _get_logits_ith(ctx, i)
+
+@export
+def llama_get_embeddings(ctx: llama_context_p) abi("c") -> FloatPtr:
+    """ Return pointer to normalized embeddings."""
+    if Int(ctx) == 0:
+        return null_ptr[Float32]()
+    return _get_embeddings(ctx)
+
+@export
+def llama_kv_cache_clear(ctx: llama_context_p) abi("c"):
+    """ Clear KV cache contents."""
+    if Int(ctx) != 0:
+        _kv_cache_clear(ctx)
 
 # ─── Sampler Pipeline ─────────────────────────────────────────────────────────
 

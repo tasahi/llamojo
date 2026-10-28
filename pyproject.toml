@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llamojo"
+version = "0.1.0"
+description = "Pure Mojo LLM engine with llama-cpp-python API compatibility"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [
+    { name = "llamojo developers" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence"
+]
+dependencies = []
+

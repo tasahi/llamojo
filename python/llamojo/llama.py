@@ -57,6 +57,7 @@ class Llama:
         self.n_vocab = self._lib.llama_model_n_vocab(self._model)
         self.n_embd = self._lib.llama_model_n_embd(self._model)
         self.n_layer = self._lib.llama_model_n_layer(self._model)
+        self.n_head = self._lib.llama_model_n_head(self._model)
 
     def __del__(self):
         self.close()
@@ -72,6 +73,166 @@ class Llama:
         if hasattr(self, "_model") and self._model:
             self._lib.llama_model_free(self._model)
             self._model = None
+
+    def reset(self):
+        """Reset KV cache and internal context state."""
+        if hasattr(self, "_ctx") and self._ctx:
+            self._lib.llama_kv_cache_clear(self._ctx)
+
+    def token_bos(self) -> int:
+        """Return BOS token ID."""
+        return self._lib.llama_vocab_bos(self._vocab)
+
+    def token_eos(self) -> int:
+        """Return EOS token ID."""
+        return self._lib.llama_vocab_eos(self._vocab)
+
+    def token_nl(self) -> int:
+        """Return newline token ID."""
+        nl_toks = self.tokenize("\n", add_bos=False)
+        return nl_toks[0] if nl_toks else 13
+
+    def eval(self, tokens: List[int]):
+        """Evaluate a sequence of tokens in the model."""
+        if not tokens:
+            return
+        batch = self._lib.llama_batch_init(1, 0, 1)
+        try:
+            for i, tok in enumerate(tokens):
+                self._lib.llama_batch_set_token(
+                    batch, 0, tok, i, 0, (i == len(tokens) - 1)
+                )
+                self._lib.llama_batch_set_n_tokens(batch, 1)
+                ret = self._lib.llama_decode(self._ctx, batch)
+                if ret != 0:
+                    raise RuntimeError(f"llama_decode failed at token {i}")
+        finally:
+            self._lib.llama_batch_free(batch)
+
+    def sample(
+        self,
+        top_k: int = 40,
+        top_p: float = 0.95,
+        temp: float = 0.8,
+        **kwargs: Any,
+    ) -> int:
+        """Sample a token from the current context logits."""
+        logits = self._lib.llama_get_logits_ith(self._ctx, 0)
+        if temp <= 0.0:
+            smpl = self._lib.llama_sampler_init_greedy()
+        else:
+            smpl = self._lib.llama_sampler_chain_init()
+            if top_k > 0:
+                self._lib.llama_sampler_chain_add(
+                    smpl, self._lib.llama_sampler_init_top_k(top_k)
+                )
+            if top_p < 1.0:
+                self._lib.llama_sampler_chain_add(
+                    smpl, self._lib.llama_sampler_init_top_p(top_p, 1)
+                )
+            self._lib.llama_sampler_chain_add(
+                smpl, self._lib.llama_sampler_init_temp(temp)
+            )
+            self._lib.llama_sampler_chain_add(
+                smpl, self._lib.llama_sampler_init_dist(int(time.time()))
+            )
+        try:
+            return self._lib.llama_sampler_sample_token(
+                smpl, logits, self.n_vocab, temp
+            )
+        finally:
+            self._lib.llama_sampler_free(smpl)
+
+    def generate(
+        self,
+        tokens: List[int],
+        top_k: int = 40,
+        top_p: float = 0.95,
+        temp: float = 0.8,
+        reset: bool = True,
+        **kwargs: Any,
+    ) -> Iterator[int]:
+        """Low-level token generator yielding next token IDs."""
+        if reset:
+            self.reset()
+        self.eval(tokens)
+        curr_pos = len(tokens)
+        batch = self._lib.llama_batch_init(1, 0, 1)
+        try:
+            while True:
+                next_tok = self.sample(top_k=top_k, top_p=top_p, temp=temp)
+                if next_tok < 0 or self._lib.llama_vocab_is_eog(self._vocab, next_tok):
+                    break
+                yield next_tok
+                self._lib.llama_batch_set_token(batch, 0, next_tok, curr_pos, 0, True)
+                self._lib.llama_batch_set_n_tokens(batch, 1)
+                ret = self._lib.llama_decode(self._ctx, batch)
+                if ret != 0:
+                    break
+                curr_pos += 1
+        finally:
+            self._lib.llama_batch_free(batch)
+
+    def embed(
+        self,
+        input: Union[str, List[str]],
+        normalize: bool = False,
+        truncate: bool = True,
+        return_count: bool = False,
+    ) -> Union[List[float], List[List[float]]]:
+        """Generate embeddings for input text or list of texts."""
+        is_single = isinstance(input, str)
+        inputs = [input] if is_single else input
+        results = []
+
+        for text in inputs:
+            self.reset()
+            toks = self.tokenize(text, add_bos=True)
+            self.eval(toks)
+            ptr = self._lib.llama_get_embeddings(self._ctx)
+            if not ptr:
+                vec = [0.0] * self.n_embd
+            else:
+                vec = [ptr[i] for i in range(self.n_embd)]
+
+            if normalize:
+                norm = sum(x * x for x in vec) ** 0.5
+                if norm > 0:
+                    vec = [x / norm for x in vec]
+            results.append(vec)
+
+        return results[0] if is_single else results
+
+    def create_embedding(
+        self,
+        input: Union[str, List[str]],
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """OpenAI-compatible embedding endpoint."""
+        is_single = isinstance(input, str)
+        inputs = [input] if is_single else input
+        embeddings = self.embed(inputs)
+        if is_single:
+            embeddings = [embeddings]
+
+        total_tokens = sum(len(self.tokenize(t, add_bos=False)) for t in inputs)
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "object": "embedding",
+                    "embedding": emb,
+                    "index": i,
+                }
+                for i, emb in enumerate(embeddings)
+            ],
+            "model": model or self.model_path,
+            "usage": {
+                "prompt_tokens": total_tokens,
+                "total_tokens": total_tokens,
+            },
+        }
 
     def tokenize(
         self, text: Union[str, bytes], add_bos: bool = True, special: bool = False
