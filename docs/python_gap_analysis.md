@@ -23,8 +23,8 @@ Through automated reflection across `llama_cpp.Llama` and `llamojo.Llama`, we tr
 | **Context / Model Properties (`n_ctx()`, `n_embd()`, `n_vocab()`)** | Yes | **Full** | Dual support as both properties (`llm.n_ctx`) and callable zero-arg methods (`llm.n_ctx()`), plus `model`, `ctx`, and `set_seed`. |
 | **Logit Processors / Custom Biases (`logit_bias`, `logits_processor`)** | Yes | **Full** | `logit_bias` dict, `LogitsProcessorList`, `MinTokensLogitsProcessor`, zero-copy NumPy array views in C memory. |
 | **Model Chat Template Engines (Jinja2 / GGUF metadata templates)** | Yes | **Full** | Automatic GGUF `tokenizer.chat_template` extraction, `Jinja2ChatFormatter`, built-in templates (`llama-3`, `gemma`, `llama-2`, `mistral-instruct`, `chatml`), `register_chat_format`, and streaming chat chunks. |
+| **Logprob Computation (`logprobs=...`)** | Yes | **Full** | Numerically stable `logits_to_logprobs`, `logprobs=k` extraction for top alternatives, text offsets, and streaming chunk logprobs. |
 | **KV Cache Serialization (`save_state`, `load_state`)** | Yes | **Pending** | Persisting and restoring KV cache state between turns or process restarts. |
-| **Logprob Computation (`logprobs=...`)** | Yes | **Pending** | Softmax logprobs array on top candidate tokens in completion outputs. |
 | **OpenAI Compatible Web Server (`python -m llama_cpp.server`)** | Yes | **Pending** | FastAPI/Uvicorn server hosting `/v1/completions` and `/v1/chat/completions`. |
 | **GPU Acceleration (CUDA, Metal, Vulkan)** | Yes | **By Design (N/A)**| `llamojo` is intentionally an ultra-optimized, dependency-free pure CPU inference engine. |
 

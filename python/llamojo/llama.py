@@ -261,7 +261,7 @@ class Llama:
         self._init_chat_handler()
 
     def _init_chat_handler(self):
-        """Resolve chat handler from custom handler, chat_format name, or GGUF metadata."""
+        """ Resolve chat handler from custom handler, chat_format name, or GGUF metadata."""
         if self.chat_handler is not None:
             return
 
@@ -299,6 +299,72 @@ class Llama:
     def ctx(self):
         """ Return the underlying context pointer."""
         return self._ctx
+
+    @staticmethod
+    def logits_to_logprobs(logits: Any, axis: int = -1) -> Any:
+        """ Compute softmax log probabilities matching llama_cpp.Llama.logits_to_logprobs."""
+        if _NUMPY_AVAILABLE:
+            if not isinstance(logits, np.ndarray):
+                logits = np.array(logits, dtype=np.single)
+            logits_max = np.amax(logits, axis=axis, keepdims=True)
+            if logits_max.ndim > 0:
+                logits_max[~np.isfinite(logits_max)] = 0
+            elif not np.isfinite(logits_max):
+                logits_max = 0
+            shifted = np.subtract(logits, logits_max, dtype=np.single)
+            exp_vals = np.exp(shifted)
+            with np.errstate(divide="ignore"):
+                sum_exp = np.sum(exp_vals, axis=axis, keepdims=True)
+                log_sum_exp = np.log(sum_exp)
+            return shifted - log_sum_exp
+        else:
+            import math
+            max_val = max(logits)
+            shifted = [x - max_val for x in logits]
+            exp_vals = [math.exp(x) for x in shifted]
+            sum_exp = sum(exp_vals)
+            log_sum_exp = math.log(sum_exp) if sum_exp > 0 else 0.0
+            return [x - log_sum_exp for x in shifted]
+
+    def _extract_logprobs_step( self,
+            logits_ptr: Any,
+            chosen_token: int,
+            k: int,
+        ) -> tuple:
+        """ Compute logprob for chosen token and top-k candidate token logprobs."""
+        addr = ctypes.cast(logits_ptr, ctypes.c_void_p).value
+        n_vocab = self._n_vocab
+
+        if _NUMPY_AVAILABLE:
+            logits_arr = np.ctypeslib.as_array((ctypes.c_float * n_vocab).from_address(addr))
+            logprobs = self.logits_to_logprobs(logits_arr)
+
+            k_clamped = max(1, min(k, n_vocab))
+            top_indices = np.argpartition(logprobs, -k_clamped)[-k_clamped:]
+            top_indices = top_indices[np.argsort(-logprobs[top_indices])]
+
+            chosen_lp = float(logprobs[chosen_token])
+            chosen_piece = self.token_to_piece(chosen_token)
+
+            top_logprobs: Dict[str, float] = {}
+            for idx in top_indices:
+                p = self.token_to_piece(int(idx))
+                top_logprobs[p] = float(logprobs[idx])
+            top_logprobs[chosen_piece] = chosen_lp
+
+            return chosen_lp, top_logprobs
+        else:
+            raw_scores = (ctypes.c_float * n_vocab).from_address(addr)
+            logprobs = self.logits_to_logprobs(list(raw_scores))
+
+            chosen_lp = float(logprobs[chosen_token])
+            chosen_piece = self.token_to_piece(chosen_token)
+
+            sorted_indices = sorted(range(n_vocab), key=lambda i: logprobs[i], reverse=True)[:k]
+            top_logprobs = {self.token_to_piece(i): float(logprobs[i]) for i in sorted_indices}
+            top_logprobs[chosen_piece] = chosen_lp
+
+            return chosen_lp, top_logprobs
 
     def set_seed(self, seed: int):
         """ Set the random seed.\n
@@ -351,11 +417,11 @@ class Llama:
         return nl_toks[0] if nl_toks else 13
 
     def _apply_logits_processors( self,
-        input_ids: Sequence[int],
-        logits_ptr: Any,
-        processors: Optional[Sequence[Callable[[Sequence[int], Any], Any]]] = None,
-        logit_bias: Optional[Dict[int, float]] = None,
-    ):
+            input_ids: Sequence[int],
+            logits_ptr: Any,
+            processors: Optional[Sequence[Callable[[Sequence[int], Any], Any]]] = None,
+            logit_bias: Optional[Dict[int, float]] = None,
+        ):
         """Apply custom logit bias and logits processors in-place."""
         if not processors and not logit_bias:
             return
@@ -614,23 +680,23 @@ class Llama:
 
         return chain
 
-    def __call__(
-        self,
-        prompt: Union[str, List[int]],
-        suffix: Optional[str] = None,
-        max_tokens: Optional[int] = 16,
-        temperature: float = 0.8,
-        top_p: float = 0.95,
-        min_p: float = 0.05,
-        top_k: int = 40,
-        stream: bool = False,
-        stop: Optional[Union[str, List[str]]] = None,
-        echo: bool = False,
-        grammar: Optional[Union[LlamaGrammar, str]] = None,
-        logits_processor: Optional[Union[LogitsProcessorList, Sequence[Callable[[Sequence[int], Any], Any]]]] = None,
-        logit_bias: Optional[Dict[int, float]] = None,
-        **kwargs: Any,
-    ) -> Union[Dict[str, Any], Iterator[Dict[str, Any]]]:
+    def __call__( self,
+            prompt: Union[str, List[int]],
+            suffix: Optional[str] = None,
+            max_tokens: Optional[int] = 16,
+            temperature: float = 0.8,
+            top_p: float = 0.95,
+            min_p: float = 0.05,
+            top_k: int = 40,
+            stream: bool = False,
+            stop: Optional[Union[str, List[str]]] = None,
+            echo: bool = False,
+            logprobs: Optional[int] = None,
+            grammar: Optional[Union[LlamaGrammar, str]] = None,
+            logits_processor: Optional[Union[LogitsProcessorList, Sequence[Callable[[Sequence[int], Any], Any]]]] = None,
+            logit_bias: Optional[Dict[int, float]] = None,
+            **kwargs: Any,
+        ) -> Union[Dict[str, Any], Iterator[Dict[str, Any]]]:
         return self.create_completion(
             prompt=prompt,
             suffix=suffix,
@@ -643,29 +709,30 @@ class Llama:
             stop=stop,
             echo=echo,
             grammar=grammar,
+            logprobs=logprobs,
             logits_processor=logits_processor,
             logit_bias=logit_bias,
             **kwargs,
         )
 
-    def create_completion(
-        self,
-        prompt: Union[str, List[int]],
-        suffix: Optional[str] = None,
-        max_tokens: Optional[int] = 16,
-        temperature: float = 0.8,
-        top_p: float = 0.95,
-        min_p: float = 0.05,
-        top_k: int = 40,
-        stream: bool = False,
-        stop: Optional[Union[str, List[str]]] = None,
-        echo: bool = False,
-        grammar: Optional[Union[LlamaGrammar, str]] = None,
-        logits_processor: Optional[Union[LogitsProcessorList, Sequence[Callable[[Sequence[int], Any], Any]]]] = None,
-        logit_bias: Optional[Dict[int, float]] = None,
-        **kwargs: Any,
-    ) -> Union[Dict[str, Any], Iterator[Dict[str, Any]]]:
-        """Generate text completion from a prompt matching llama-cpp-python's schema."""
+    def create_completion( self,
+            prompt: Union[str, List[int]],
+            suffix: Optional[str] = None,
+            max_tokens: Optional[int] = 16,
+            temperature: float = 0.8,
+            top_p: float = 0.95,
+            min_p: float = 0.05,
+            top_k: int = 40,
+            stream: bool = False,
+            stop: Optional[Union[str, List[str]]] = None,
+            echo: bool = False,
+            logprobs: Optional[int] = None,
+            grammar: Optional[Union[LlamaGrammar, str]] = None,
+            logits_processor: Optional[Union[LogitsProcessorList, Sequence[Callable[[Sequence[int], Any], Any]]]] = None,
+            logit_bias: Optional[Dict[int, float]] = None,
+            **kwargs: Any,
+        ) -> Union[Dict[str, Any], Iterator[Dict[str, Any]]]:
+        """ Generate text completion from a prompt matching llama-cpp-python's schema."""
         if isinstance(prompt, str):
             tokens = self.tokenize(prompt, add_bos=True)
             prompt_str = prompt
@@ -696,6 +763,7 @@ class Llama:
                 grammar,
                 processors_seq,
                 logit_bias,
+                logprobs,
             )
 
         # Batch decode prompt tokens
@@ -717,6 +785,12 @@ class Llama:
         finish_reason = "length"
         curr_tokens = list(tokens)
 
+        # Logprob collector data structures
+        lp_tokens: List[str] = []
+        lp_text_offset: List[int] = []
+        lp_token_logprobs: List[float] = []
+        lp_top_logprobs: List[Dict[str, float]] = []
+
         for step in range(max_tokens):
             logits = self._lib.llama_get_logits_ith(self._ctx, 0)
             self._apply_logits_processors(curr_tokens, logits, processors_seq, logit_bias)
@@ -727,10 +801,20 @@ class Llama:
                 finish_reason = "stop"
                 break
 
+            # Calculate logprobs before context modification
+            if logprobs is not None:
+                token_lp, top_lp = self._extract_logprobs_step(logits, next_tok, logprobs)
+                piece = self.token_to_piece(next_tok)
+                lp_tokens.append(piece)
+                lp_text_offset.append(len(gen_text))
+                lp_token_logprobs.append(token_lp)
+                lp_top_logprobs.append(top_lp)
+            else:
+                piece = self.token_to_piece(next_tok)
+
             self._lib.llama_sampler_accept_token(smpl, next_tok)
             gen_tokens.append(next_tok)
             curr_tokens.append(next_tok)
-            piece = self.token_to_piece(next_tok)
             gen_text += piece
 
             # Stop sequence check
@@ -759,6 +843,15 @@ class Llama:
 
         full_text = (prompt_str + gen_text) if echo else gen_text
 
+        logprobs_data = None
+        if logprobs is not None:
+            logprobs_data = {
+                "tokens": lp_tokens,
+                "text_offset": lp_text_offset,
+                "token_logprobs": lp_token_logprobs,
+                "top_logprobs": lp_top_logprobs,
+            }
+
         response_id = f"cmpl-{uuid.uuid4()}"
         return {
             "id": response_id,
@@ -769,7 +862,7 @@ class Llama:
                 {
                     "text": full_text,
                     "index": 0,
-                    "logprobs": None,
+                    "logprobs": logprobs_data,
                     "finish_reason": finish_reason,
                 }
             ],
@@ -791,6 +884,7 @@ class Llama:
             grammar: Optional[Union[LlamaGrammar, str]] = None,
             logits_processor: Optional[Sequence[Callable[[Sequence[int], Any], Any]]] = None,
             logit_bias: Optional[Dict[int, float]] = None,
+            logprobs: Optional[int] = None,
         ) -> Iterator[Dict[str, Any]]:
         """ Streaming token generator with grammar and logits processor integration."""
         batch = self._lib.llama_batch_init(1, 0, 1)
@@ -824,8 +918,21 @@ class Llama:
                     }
                     break
 
+                # Extract per-chunk logprobs if requested
+                chunk_logprobs = None
+                if logprobs is not None:
+                    tok_lp, top_lp = self._extract_logprobs_step(logits, next_tok, logprobs)
+                    piece = self.token_to_piece(next_tok)
+                    chunk_logprobs = {
+                        "tokens": [piece],
+                        "text_offset": [len(accumulated)],
+                        "token_logprobs": [tok_lp],
+                        "top_logprobs": [top_lp],
+                    }
+                else:
+                    piece = self.token_to_piece(next_tok)
+
                 self._lib.llama_sampler_accept_token(smpl, next_tok)
-                piece = self.token_to_piece(next_tok)
                 accumulated += piece
                 curr_tokens.append(next_tok)
 
@@ -854,7 +961,7 @@ class Llama:
                         {
                             "text": piece,
                             "index": 0,
-                            "logprobs": None,
+                            "logprobs": chunk_logprobs,
                             "finish_reason": None,
                         }
                     ],

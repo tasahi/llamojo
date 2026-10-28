@@ -146,6 +146,26 @@ class TestLlamojoPython(unittest.TestCase):
         chunks = list(self.llm("Once upon a", max_tokens=1, temperature=0.0, logit_bias={b_tok: 100.0}, stream=True))
         self.assertEqual(chunks[0]["choices"][0]["text"], self.llm.token_to_piece(b_tok))
 
+    def test_logprob_computation(self):
+        # 1. Non-streaming logprobs
+        res = self.llm("The sun rises in the", max_tokens=3, temperature=0.0, logprobs=5)
+        lp = res["choices"][0]["logprobs"]
+        self.assertIsNotNone(lp)
+        self.assertEqual(len(lp["tokens"]), 3)
+        self.assertEqual(len(lp["token_logprobs"]), 3)
+        self.assertEqual(len(lp["top_logprobs"]), 3)
+        self.assertGreaterEqual(len(lp["top_logprobs"][0]), 5)
+        for val in lp["token_logprobs"]:
+            self.assertLessEqual(val, 0.0)
+
+        # 2. Streaming logprobs
+        chunks = list(self.llm("The sun rises in the", max_tokens=2, temperature=0.0, logprobs=3, stream=True))
+        first_lp = chunks[0]["choices"][0]["logprobs"]
+        self.assertIsNotNone(first_lp)
+        self.assertEqual(len(first_lp["tokens"]), 1)
+        self.assertEqual(len(first_lp["token_logprobs"]), 1)
+        self.assertGreaterEqual(len(first_lp["top_logprobs"][0]), 3)
+
 
 if __name__ == "__main__":
     unittest.main()
