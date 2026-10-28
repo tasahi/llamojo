@@ -5,9 +5,49 @@ import json
 import os
 import time
 import uuid
-from typing import Any, Dict, Iterator, List, Optional, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
 
 from ._lib import get_lib
+
+try:
+    import numpy as np
+    import numpy.typing as npt
+    _NUMPY_AVAILABLE = True
+except ImportError:
+    np = None  # type: ignore
+    npt = None  # type: ignore
+    _NUMPY_AVAILABLE = False
+
+
+LogitsProcessor = Callable[[Sequence[int], Any], Any]
+
+
+class LogitsProcessorList(List[LogitsProcessor]):
+    """ Chain of logits processors matching llama_cpp.LogitsProcessorList."""
+
+    def __call__(self, input_ids: Sequence[int], scores: Any) -> Any:
+        for processor in self:
+            scores = processor(input_ids, scores)
+        return scores
+
+
+class MinTokensLogitsProcessor:
+    """ Logits processor preventing EOS token generation until min_tokens is reached."""
+
+    def __init__(self, min_tokens: int, token_eos: int):
+        self.min_tokens = min_tokens
+        self.token_eos = token_eos
+        self.prompt_tokens: Optional[int] = None
+
+    def __call__(self, input_ids: Sequence[int], scores: Any) -> Any:
+        if self.prompt_tokens is None:
+            self.prompt_tokens = len(input_ids)
+        if len(input_ids) - self.prompt_tokens < self.min_tokens:
+            if _NUMPY_AVAILABLE and isinstance(scores, np.ndarray):
+                scores[self.token_eos] = -np.inf
+            else:
+                scores[self.token_eos] = float("-inf")
+        return scores
 
 
 class _CallableInt(int):
@@ -45,7 +85,7 @@ class LlamaGrammar:
 
     @classmethod
     def from_json_schema(cls, schema: Union[str, Dict[str, Any]]) -> "LlamaGrammar":
-        """Generate a grammar constraining output to a JSON object matching schema."""
+        """ Generate a grammar constraining output to a JSON object matching schema."""
         if isinstance(schema, dict):
             _ = json.dumps(schema)
         # Built-in JSON validator pattern handled by llamojo grammar engine
@@ -266,6 +306,38 @@ class Llama:
         nl_toks = self.tokenize("\n", add_bos=False)
         return nl_toks[0] if nl_toks else 13
 
+    def _apply_logits_processors( self,
+        input_ids: Sequence[int],
+        logits_ptr: Any,
+        processors: Optional[Sequence[Callable[[Sequence[int], Any], Any]]] = None,
+        logit_bias: Optional[Dict[int, float]] = None,
+    ):
+        """Apply custom logit bias and logits processors in-place."""
+        if not processors and not logit_bias:
+            return
+
+        # Direct pointer manipulation
+        if logit_bias:
+            for tok_id, bias in logit_bias.items():
+                if 0 <= tok_id < self._n_vocab:
+                    logits_ptr[tok_id] += float(bias)
+
+        if processors:
+            addr = ctypes.cast(logits_ptr, ctypes.c_void_p).value
+            if _NUMPY_AVAILABLE:
+                scores = np.ctypeslib.as_array((ctypes.c_float * self._n_vocab).from_address(addr))
+            else:
+                scores = (ctypes.c_float * self._n_vocab).from_address(addr)
+
+            for proc in processors:
+                res = proc(input_ids, scores)
+                if res is not None and res is not scores:
+                    if _NUMPY_AVAILABLE and isinstance(res, np.ndarray):
+                        np.copyto(scores, res)
+                    else:
+                        for idx, val in enumerate(res):
+                            scores[idx] = val
+
     def eval(self, tokens: List[int]):
         """ Evaluate a sequence of tokens in the model."""
         if not tokens:
@@ -288,10 +360,14 @@ class Llama:
             top_p: float = 0.95,
             temp: float = 0.8,
             grammar: Optional[Union[LlamaGrammar, str]] = None,
+            logits_processor: Optional[Sequence[Callable[[Sequence[int], Any], Any]]] = None,
+            logit_bias: Optional[Dict[int, float]] = None,
+            idx: Sequence[int] = (),
             **kwargs: Any,
         ) -> int:
         """ Sample a token from the current context logits."""
         logits = self._lib.llama_get_logits_ith(self._ctx, 0)
+        self._apply_logits_processors(idx, logits, logits_processor, logit_bias)
         smpl = self._build_sampler(temp=temp, top_k=top_k, top_p=top_p, grammar=grammar)
         try:
             return self._lib.llama_sampler_sample_token(
@@ -307,6 +383,8 @@ class Llama:
             temp: float = 0.8,
             reset: bool = True,
             grammar: Optional[Union[LlamaGrammar, str]] = None,
+            logits_processor: Optional[Sequence[Callable[[Sequence[int], Any], Any]]] = None,
+            logit_bias: Optional[Dict[int, float]] = None,
             **kwargs: Any,
         ) -> Iterator[int]:
         """ Low-level token generator yielding next token IDs."""
@@ -314,11 +392,13 @@ class Llama:
             self.reset()
         self.eval(tokens)
         curr_pos = len(tokens)
+        all_tokens = list(tokens)
         batch = self._lib.llama_batch_init(1, 0, 1)
         smpl = self._build_sampler(temp=temp, top_k=top_k, top_p=top_p, grammar=grammar)
         try:
             while True:
                 logits = self._lib.llama_get_logits_ith(self._ctx, 0)
+                self._apply_logits_processors(all_tokens, logits, logits_processor, logit_bias)
                 next_tok = self._lib.llama_sampler_sample_token(
                     smpl, logits, self.n_vocab, temp
                 )
@@ -326,6 +406,7 @@ class Llama:
                     break
                 self._lib.llama_sampler_accept_token(smpl, next_tok)
                 yield next_tok
+                all_tokens.append(next_tok)
                 self._lib.llama_batch_set_token(batch, 0, next_tok, curr_pos, 0, True)
                 self._lib.llama_batch_set_n_tokens(batch, 1)
                 ret = self._lib.llama_decode(self._ctx, batch)
@@ -489,20 +570,23 @@ class Llama:
 
         return chain
 
-    def __call__( self,
-            prompt: Union[str, List[int]],
-            suffix: Optional[str] = None,
-            max_tokens: Optional[int] = 16,
-            temperature: float = 0.8,
-            top_p: float = 0.95,
-            min_p: float = 0.05,
-            top_k: int = 40,
-            stream: bool = False,
-            stop: Optional[Union[str, List[str]]] = None,
-            echo: bool = False,
-            grammar: Optional[Union[LlamaGrammar, str]] = None,
-            **kwargs: Any,
-        ) -> Union[Dict[str, Any], Iterator[Dict[str, Any]]]:
+    def __call__(
+        self,
+        prompt: Union[str, List[int]],
+        suffix: Optional[str] = None,
+        max_tokens: Optional[int] = 16,
+        temperature: float = 0.8,
+        top_p: float = 0.95,
+        min_p: float = 0.05,
+        top_k: int = 40,
+        stream: bool = False,
+        stop: Optional[Union[str, List[str]]] = None,
+        echo: bool = False,
+        grammar: Optional[Union[LlamaGrammar, str]] = None,
+        logits_processor: Optional[Union[LogitsProcessorList, Sequence[Callable[[Sequence[int], Any], Any]]]] = None,
+        logit_bias: Optional[Dict[int, float]] = None,
+        **kwargs: Any,
+    ) -> Union[Dict[str, Any], Iterator[Dict[str, Any]]]:
         return self.create_completion(
             prompt=prompt,
             suffix=suffix,
@@ -515,24 +599,29 @@ class Llama:
             stop=stop,
             echo=echo,
             grammar=grammar,
+            logits_processor=logits_processor,
+            logit_bias=logit_bias,
             **kwargs,
         )
 
-    def create_completion( self,
-            prompt: Union[str, List[int]],
-            suffix: Optional[str] = None,
-            max_tokens: Optional[int] = 16,
-            temperature: float = 0.8,
-            top_p: float = 0.95,
-            min_p: float = 0.05,
-            top_k: int = 40,
-            stream: bool = False,
-            stop: Optional[Union[str, List[str]]] = None,
-            echo: bool = False,
-            grammar: Optional[Union[LlamaGrammar, str]] = None,
-            **kwargs: Any,
-        ) -> Union[Dict[str, Any], Iterator[Dict[str, Any]]]:
-        """ Generate text completion from a prompt matching llama-cpp-python's schema."""
+    def create_completion(
+        self,
+        prompt: Union[str, List[int]],
+        suffix: Optional[str] = None,
+        max_tokens: Optional[int] = 16,
+        temperature: float = 0.8,
+        top_p: float = 0.95,
+        min_p: float = 0.05,
+        top_k: int = 40,
+        stream: bool = False,
+        stop: Optional[Union[str, List[str]]] = None,
+        echo: bool = False,
+        grammar: Optional[Union[LlamaGrammar, str]] = None,
+        logits_processor: Optional[Union[LogitsProcessorList, Sequence[Callable[[Sequence[int], Any], Any]]]] = None,
+        logit_bias: Optional[Dict[int, float]] = None,
+        **kwargs: Any,
+    ) -> Union[Dict[str, Any], Iterator[Dict[str, Any]]]:
+        """Generate text completion from a prompt matching llama-cpp-python's schema."""
         if isinstance(prompt, str):
             tokens = self.tokenize(prompt, add_bos=True)
             prompt_str = prompt
@@ -549,9 +638,20 @@ class Llama:
         elif isinstance(stop, list):
             stop_sequences = stop
 
+        processors_seq = list(logits_processor) if logits_processor else []
+
         if stream:
             return self._stream_generator(
-                tokens, prompt_str, max_tokens, temperature, top_k, top_p, stop_sequences, grammar
+                tokens,
+                prompt_str,
+                max_tokens,
+                temperature,
+                top_k,
+                top_p,
+                stop_sequences,
+                grammar,
+                processors_seq,
+                logit_bias,
             )
 
         # Batch decode prompt tokens
@@ -571,9 +671,11 @@ class Llama:
         gen_tokens: List[int] = []
         gen_text = ""
         finish_reason = "length"
+        curr_tokens = list(tokens)
 
         for step in range(max_tokens):
             logits = self._lib.llama_get_logits_ith(self._ctx, 0)
+            self._apply_logits_processors(curr_tokens, logits, processors_seq, logit_bias)
             next_tok = self._lib.llama_sampler_sample_token(
                 smpl, logits, self.n_vocab, temperature
             )
@@ -583,6 +685,7 @@ class Llama:
 
             self._lib.llama_sampler_accept_token(smpl, next_tok)
             gen_tokens.append(next_tok)
+            curr_tokens.append(next_tok)
             piece = self.token_to_piece(next_tok)
             gen_text += piece
 
@@ -633,17 +736,20 @@ class Llama:
             },
         }
 
-    def _stream_generator( self,
-            tokens: List[int],
-            prompt_str: str,
-            max_tokens: int,
-            temperature: float,
-            top_k: int,
-            top_p: float,
-            stop_sequences: List[str],
-            grammar: Optional[Union[LlamaGrammar, str]] = None,
-        ) -> Iterator[Dict[str, Any]]:
-        """ Streaming token generator with grammar integration."""
+    def _stream_generator(
+        self,
+        tokens: List[int],
+        prompt_str: str,
+        max_tokens: int,
+        temperature: float,
+        top_k: int,
+        top_p: float,
+        stop_sequences: List[str],
+        grammar: Optional[Union[LlamaGrammar, str]] = None,
+        logits_processor: Optional[Sequence[Callable[[Sequence[int], Any], Any]]] = None,
+        logit_bias: Optional[Dict[int, float]] = None,
+    ) -> Iterator[Dict[str, Any]]:
+        """Streaming token generator with grammar and logits processor integration."""
         batch = self._lib.llama_batch_init(1, 0, 1)
         for i, tok in enumerate(tokens):
             self._lib.llama_batch_set_token(
@@ -655,10 +761,12 @@ class Llama:
         smpl = self._build_sampler(temp=temperature, top_k=top_k, top_p=top_p, grammar=grammar)
         resp_id = f"cmpl-{uuid.uuid4()}"
         accumulated = ""
+        curr_tokens = list(tokens)
 
         try:
             for step in range(max_tokens):
                 logits = self._lib.llama_get_logits_ith(self._ctx, 0)
+                self._apply_logits_processors(curr_tokens, logits, logits_processor, logit_bias)
                 next_tok = self._lib.llama_sampler_sample_token(
                     smpl, logits, self.n_vocab, temperature
                 )
@@ -676,6 +784,7 @@ class Llama:
                 self._lib.llama_sampler_accept_token(smpl, next_tok)
                 piece = self.token_to_piece(next_tok)
                 accumulated += piece
+                curr_tokens.append(next_tok)
 
                 # Check stops
                 stopped = False

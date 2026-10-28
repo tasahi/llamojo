@@ -86,5 +86,35 @@ class TestLlamojoPython(unittest.TestCase):
             finally:
                 llm.close()
 
+    def test_logits_processor_and_logit_bias(self):
+        from llamojo import LogitsProcessorList
+
+        banana_toks = self.llm.tokenize("banana", add_bos=False)
+        b_tok = banana_toks[0]
+
+        # 1. Direct logit_bias in create_completion
+        res = self.llm("Once upon a", max_tokens=1, temperature=0.0, logit_bias={b_tok: 100.0})
+        self.assertEqual(res["choices"][0]["text"], self.llm.token_to_piece(b_tok))
+
+        # 2. Negative logit_bias to forbid most likely token
+        res_normal = self.llm("1 2 3", max_tokens=1, temperature=0.0)
+        tok_normal = self.llm.tokenize(res_normal["choices"][0]["text"], add_bos=False)[0]
+        res_forbidden = self.llm("1 2 3", max_tokens=1, temperature=0.0, logit_bias={tok_normal: -100.0})
+        self.assertNotEqual(res_forbidden["choices"][0]["text"], res_normal["choices"][0]["text"])
+
+        # 3. Custom LogitsProcessorList
+        def boost_processor(input_ids, scores):
+            scores[b_tok] += 500.0
+            return scores
+
+        procs = LogitsProcessorList([boost_processor])
+        res_proc = self.llm("The secret word is", max_tokens=1, temperature=0.0, logits_processor=procs)
+        self.assertEqual(res_proc["choices"][0]["text"], self.llm.token_to_piece(b_tok))
+
+        # 4. Streaming with logit_bias
+        chunks = list(self.llm("Once upon a", max_tokens=1, temperature=0.0, logit_bias={b_tok: 100.0}, stream=True))
+        self.assertEqual(chunks[0]["choices"][0]["text"], self.llm.token_to_piece(b_tok))
+
+
 if __name__ == "__main__":
     unittest.main()
