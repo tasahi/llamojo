@@ -57,6 +57,37 @@ class TestLlamojoPython(unittest.TestCase):
         self.assertEqual(res["choices"][0]["message"]["role"], "assistant")
         self.assertIsInstance(res["choices"][0]["message"]["content"], str)
 
+    def test_chat_completion_streaming(self):
+        chunks = list(
+            self.llm.create_chat_completion(
+                [{"role": "user", "content": "Count to 3"}],
+                max_tokens=6,
+                temperature=0.0,
+                stream=True,
+            )
+        )
+        self.assertGreater(len(chunks), 0)
+        self.assertEqual(chunks[0]["object"], "chat.completion.chunk")
+        self.assertEqual(chunks[0]["choices"][0]["delta"].get("role"), "assistant")
+
+    def test_chat_template_formats(self):
+        from llamojo import get_chat_formatter
+        messages = [{"role": "user", "content": "Hi"}]
+
+        # Test llama-3 formatter
+        llama3_fmt = get_chat_formatter("llama-3")
+        self.assertIsNotNone(llama3_fmt)
+        resp = llama3_fmt(messages)
+        self.assertIn("<|start_header_id|>user<|end_header_id|>", resp.prompt)
+        self.assertIn("<|start_header_id|>assistant<|end_header_id|>", resp.prompt)
+
+        # Test gemma formatter
+        gemma_fmt = get_chat_formatter("gemma")
+        self.assertIsNotNone(gemma_fmt)
+        resp = gemma_fmt(messages)
+        self.assertIn("<start_of_turn>user\nHi<end_of_turn>", resp.prompt)
+        self.assertIn("<start_of_turn>model\n", resp.prompt)
+
     def test_context_and_model_properties(self):
         # Attribute access
         self.assertEqual(self.llm.n_ctx, 256)

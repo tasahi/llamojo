@@ -8,6 +8,13 @@ import uuid
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
 
 from ._lib import get_lib
+from .chat_format import (
+    ChatFormatter,
+    ChatFormatterResponse,
+    Jinja2ChatFormatter,
+    extract_chat_template_from_gguf,
+    get_chat_formatter,
+)
 
 try:
     import numpy as np
@@ -196,6 +203,8 @@ class Llama:
             n_gpu_layers: int = 0,
             lora_path: Optional[str] = None,
             lora_scale: float = 1.0,
+            chat_format: Optional[str] = None,
+            chat_handler: Optional[ChatFormatter] = None,
             verbose: bool = False,
             **kwargs: Any,
         ):
@@ -245,6 +254,41 @@ class Llama:
         self.n_embd = _CallableInt(self._n_embd)
         self.n_layer = _CallableInt(self._n_layer)
         self.n_head = _CallableInt(self._n_head)
+
+        # Chat format resolution
+        self.chat_format = chat_format
+        self.chat_handler = chat_handler
+        self._init_chat_handler()
+
+    def _init_chat_handler(self):
+        """Resolve chat handler from custom handler, chat_format name, or GGUF metadata."""
+        if self.chat_handler is not None:
+            return
+
+        if self.chat_format is not None:
+            formatter = get_chat_formatter(self.chat_format)
+            if formatter:
+                self.chat_handler = formatter
+                return
+
+        # Attempt to extract tokenizer.chat_template from GGUF metadata
+        tmpl_str = extract_chat_template_from_gguf(self.model_path)
+        if tmpl_str:
+            try:
+                eos_piece = self.token_to_piece(self.token_eos(), special=True) or "<|im_end|>"
+                bos_piece = self.token_to_piece(self.token_bos(), special=True) or "<|im_start|>"
+                self.chat_handler = Jinja2ChatFormatter(
+                    template=tmpl_str,
+                    eos_token=eos_piece,
+                    bos_token=bos_piece,
+                    add_generation_prompt=True,
+                )
+                return
+            except Exception:
+                pass
+
+        # Fallback to standard chatml
+        self.chat_handler = get_chat_formatter("chatml")
 
     @property
     def model(self):
@@ -736,20 +780,19 @@ class Llama:
             },
         }
 
-    def _stream_generator(
-        self,
-        tokens: List[int],
-        prompt_str: str,
-        max_tokens: int,
-        temperature: float,
-        top_k: int,
-        top_p: float,
-        stop_sequences: List[str],
-        grammar: Optional[Union[LlamaGrammar, str]] = None,
-        logits_processor: Optional[Sequence[Callable[[Sequence[int], Any], Any]]] = None,
-        logit_bias: Optional[Dict[int, float]] = None,
-    ) -> Iterator[Dict[str, Any]]:
-        """Streaming token generator with grammar and logits processor integration."""
+    def _stream_generator( self,
+            tokens: List[int],
+            prompt_str: str,
+            max_tokens: int,
+            temperature: float,
+            top_k: int,
+            top_p: float,
+            stop_sequences: List[str],
+            grammar: Optional[Union[LlamaGrammar, str]] = None,
+            logits_processor: Optional[Sequence[Callable[[Sequence[int], Any], Any]]] = None,
+            logit_bias: Optional[Dict[int, float]] = None,
+        ) -> Iterator[Dict[str, Any]]:
+        """ Streaming token generator with grammar and logits processor integration."""
         batch = self._lib.llama_batch_init(1, 0, 1)
         for i, tok in enumerate(tokens):
             self._lib.llama_batch_set_token(
@@ -828,19 +871,112 @@ class Llama:
 
     def create_chat_completion( self,
             messages: List[Dict[str, str]],
+            functions: Optional[List[Dict[str, Any]]] = None,
+            function_call: Optional[Any] = None,
+            tools: Optional[List[Dict[str, Any]]] = None,
+            tool_choice: Optional[Any] = None,
+            temperature: float = 0.8,
+            top_p: float = 0.95,
+            top_k: int = 40,
+            stream: bool = False,
+            stop: Optional[Union[str, List[str]]] = None,
+            max_tokens: Optional[int] = None,
+            grammar: Optional[Union[LlamaGrammar, str]] = None,
             **kwargs: Any,
-        ) -> Dict[str, Any]:
-        """ Basic Chat Completion matching OpenAI / llama-cpp-python chat format."""
-        formatted = ""
-        for m in messages:
-            role = m.get("role", "user")
-            content = m.get("content", "")
-            formatted += f"<|im_start|>{role}\n{content}<|im_end|>\n"
-        formatted += "<|im_start|>assistant\n"
+        ) -> Union[Dict[str, Any], Iterator[Dict[str, Any]]]:
+        """ Chat Completion matching OpenAI / llama-cpp-python chat format."""
+        if self.chat_handler is not None:
+            formatter_resp = self.chat_handler(
+                messages,
+                functions=functions,
+                function_call=function_call,
+                tools=tools,
+                tool_choice=tool_choice,
+                **kwargs,
+            )
+            prompt = formatter_resp.prompt
+            stop_candidates = list(formatter_resp.stop or [])
+            if stop:
+                if isinstance(stop, str):
+                    stop_candidates.append(stop)
+                elif isinstance(stop, list):
+                    stop_candidates.extend(stop)
+            stop_seq = stop_candidates if stop_candidates else None
+        else:
+            # Fallback ChatML format
+            formatted = ""
+            for m in messages:
+                role = m.get("role", "user")
+                content = m.get("content", "")
+                formatted += f"<|im_start|>{role}\n{content}<|im_end|>\n"
+            formatted += "<|im_start|>assistant\n"
+            prompt = formatted
+            stop_seq = ["<|im_end|>"]
+            if stop:
+                if isinstance(stop, str):
+                    stop_seq.append(stop)
+                elif isinstance(stop, list):
+                    stop_seq.extend(stop)
 
-        res = self.create_completion(formatted, **kwargs)
+        if stream:
+            return self._stream_chat_generator(
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                stop=stop_seq,
+                grammar=grammar,
+                **kwargs,
+            )
+
+        res = self.create_completion(
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            stop=stop_seq,
+            grammar=grammar,
+            **kwargs,
+        )
+
         if isinstance(res, dict):
             choice = res["choices"][0]
             choice["message"] = {"role": "assistant", "content": choice["text"]}
+            del choice["text"]
             res["object"] = "chat.completion"
         return res
+
+    def _stream_chat_generator( self,
+            prompt: str,
+            **kwargs: Any,
+        ) -> Iterator[Dict[str, Any]]:
+        """ Streaming chat completion generator yielding OpenAI chat chunks."""
+        first = True
+        stream_iter = self.create_completion(prompt=prompt, stream=True, **kwargs)
+        for chunk in stream_iter:
+            c = chunk["choices"][0]
+            text = c.get("text", "")
+            finish_reason = c.get("finish_reason")
+
+            delta = {}
+            if first:
+                delta["role"] = "assistant"
+                first = False
+            if text:
+                delta["content"] = text
+
+            yield {
+                "id": chunk.get("id"),
+                "object": "chat.completion.chunk",
+                "created": chunk.get("created"),
+                "model": self.model_path,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": delta,
+                        "finish_reason": finish_reason,
+                    }
+                ],
+            }
