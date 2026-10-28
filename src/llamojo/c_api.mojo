@@ -50,8 +50,19 @@ from llamojo import (
     llama_sampler_init_temp as _sampler_init_temp,
     llama_sampler_init_dist as _sampler_init_dist,
     llama_sampler_init_greedy as _sampler_init_greedy,
+    llama_sampler_init_grammar as _sampler_init_grammar,
+    llama_sampler_accept as _sampler_accept,
     llama_sampler_sample as _sampler_sample,
     llama_sampler_free as _sampler_free,
+    GbnfGrammar,
+    llama_grammar_p,
+    llama_grammar_init as _grammar_init,
+    llama_grammar_free as _grammar_free,
+    llama_lora_adapter,
+    llama_lora_adapter_p,
+    llama_lora_adapter_init as _lora_adapter_init,
+    llama_lora_adapter_free as _lora_adapter_free,
+    llama_adapter_lora_apply as _adapter_lora_apply,
     llama_vocab,
     llama_vocab_p,
     llama_tokenize as _tokenize,
@@ -391,3 +402,68 @@ def llama_sampler_sample_token(
 def llama_sampler_free(smpl: llama_sampler_p) abi("c"):
     if Int(smpl) != 0:
         _sampler_free(smpl)
+
+# ─── GBNF Grammar Sampling ────────────────────────────────────────────────────
+
+@export
+def llama_grammar_init(grammar_cstr: BytePtr) abi("c") -> llama_grammar_p:
+    """ Initialize a GBNF grammar parser handle."""
+    if Int(grammar_cstr) == 0:
+        return null_ptr[GbnfGrammar]()
+    var g_str = _cstr_to_string(grammar_cstr)
+    return _grammar_init(g_str)
+
+@export
+def llama_grammar_free(grammar: llama_grammar_p) abi("c"):
+    """ Free a GBNF grammar instance."""
+    if Int(grammar) != 0:
+        _grammar_free(grammar)
+
+@export
+def llama_sampler_init_grammar(
+    vocab: llama_vocab_p,
+    grammar_pattern_cstr: BytePtr,
+) abi("c") -> llama_sampler_p:
+    """ Initialize a grammar-constrained sampler using model vocabulary tokens."""
+    if Int(grammar_pattern_cstr) == 0:
+        return null_ptr[llama_sampler]()
+    var pat = _cstr_to_string(grammar_pattern_cstr)
+    var tokens_list = List[String]()
+    if Int(vocab) != 0:
+        tokens_list = vocab[].tokens.copy()
+    return _sampler_init_grammar(pat, tokens_list)
+
+@export
+def llama_sampler_accept_token(smpl: llama_sampler_p, token: llama_token) abi("c"):
+    """ Advance sampler state (e.g. grammar pushdown automaton or repetition history)."""
+    if Int(smpl) != 0:
+        _sampler_accept(smpl, token)
+
+# ─── LoRA Adapter Ingestion & Merging ─────────────────────────────────────────
+
+@export
+def llama_lora_adapter_init(path_cstr: BytePtr) abi("c") -> llama_lora_adapter_p:
+    """ Load and parse a LoRA adapter GGUF file."""
+    if Int(path_cstr) == 0:
+        return null_ptr[llama_lora_adapter]()
+    var path = _cstr_to_string(path_cstr)
+    var dummy = null_ptr[NoneType]()
+    return _lora_adapter_init(dummy, path)
+
+@export
+def llama_lora_adapter_free(adapter: llama_lora_adapter_p) abi("c"):
+    """ Free a loaded LoRA adapter."""
+    if Int(adapter) != 0:
+        _lora_adapter_free(adapter)
+
+@export
+def llama_lora_adapter_apply(
+    model: llama_model_p,
+    adapter_path_cstr: BytePtr,
+    scale: Float32 = 1.0,
+) abi("c") -> Int32:
+    """ Apply a LoRA adapter GGUF directly to base model weights in-place."""
+    if Int(model) == 0 or Int(adapter_path_cstr) == 0:
+        return -1
+    var path = _cstr_to_string(adapter_path_cstr)
+    return _adapter_lora_apply(model, path, scale)

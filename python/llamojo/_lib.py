@@ -188,6 +188,33 @@ def get_lib() -> ctypes.CDLL:
     lib.llama_sampler_free.argtypes = [ctypes.c_void_p]
     lib.llama_sampler_free.restype = None
 
+    # GBNF Grammar
+    lib.llama_grammar_init.argtypes = [ctypes.c_char_p]
+    lib.llama_grammar_init.restype = ctypes.c_void_p
+
+    lib.llama_grammar_free.argtypes = [ctypes.c_void_p]
+    lib.llama_grammar_free.restype = None
+
+    lib.llama_sampler_init_grammar.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.llama_sampler_init_grammar.restype = ctypes.c_void_p
+
+    lib.llama_sampler_accept_token.argtypes = [ctypes.c_void_p, ctypes.c_int32]
+    lib.llama_sampler_accept_token.restype = None
+
+    # LoRA Adapters
+    lib.llama_lora_adapter_init.argtypes = [ctypes.c_char_p]
+    lib.llama_lora_adapter_init.restype = ctypes.c_void_p
+
+    lib.llama_lora_adapter_free.argtypes = [ctypes.c_void_p]
+    lib.llama_lora_adapter_free.restype = None
+
+    lib.llama_lora_adapter_apply.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_char_p,
+        ctypes.c_float,
+    ]
+    lib.llama_lora_adapter_apply.restype = ctypes.c_int32
+
     lib.llama_backend_init()
     _lib = lib
     return _lib
