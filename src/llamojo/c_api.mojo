@@ -29,6 +29,9 @@ from llamojo import (
     llama_get_logits_ith as _get_logits_ith,
     llama_get_embeddings as _get_embeddings,
     llama_kv_cache_clear as _kv_cache_clear,
+    llama_state_get_size as _state_get_size,
+    llama_state_get_data as _state_get_data,
+    llama_state_set_data as _state_set_data,
     llama_model_n_vocab as _model_n_vocab,
     llama_model_n_ctx_train as _model_n_ctx_train,
     llama_model_n_embd as _model_n_embd,
@@ -330,6 +333,27 @@ def llama_kv_cache_clear(ctx: llama_context_p) abi("c"):
     """ Clear KV cache contents."""
     if Int(ctx) != 0:
         _kv_cache_clear(ctx)
+
+@export
+def llama_state_get_size(ctx: llama_context_p) abi("c") -> UInt64:
+    """ Return exact size in bytes required for context state serialization."""
+    if Int(ctx) == 0:
+        return 0
+    return _state_get_size(ctx)
+
+@export
+def llama_state_get_data(ctx: llama_context_p, dst: BytePtr, size: UInt64) abi("c") -> UInt64:
+    """ Serialize context state into dst buffer."""
+    if Int(ctx) == 0 or Int(dst) == 0:
+        return 0
+    return _state_get_data(ctx, dst, size)
+
+@export
+def llama_state_set_data(ctx: llama_context_p, src: BytePtr, size: UInt64) abi("c") -> UInt64:
+    """ Restore context state from src buffer."""
+    if Int(ctx) == 0 or Int(src) == 0:
+        return 0
+    return _state_set_data(ctx, src, size)
 
 # ─── Sampler Pipeline ─────────────────────────────────────────────────────────
 

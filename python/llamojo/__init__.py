@@ -6,11 +6,18 @@ from .chat_format import (
     get_chat_formatter,
     register_chat_format,
 )
-from .llama import Llama, LlamaGrammar, LogitsProcessorList, MinTokensLogitsProcessor
+from .llama import (
+    Llama,
+    LlamaGrammar,
+    LlamaState,
+    LogitsProcessorList,
+    MinTokensLogitsProcessor,
+)
 
 __all__ = [
     "Llama",
     "LlamaGrammar",
+    "LlamaState",
     "LogitsProcessorList",
     "MinTokensLogitsProcessor",
     "ChatFormatterResponse",

@@ -99,6 +99,25 @@ class LlamaGrammar:
         return cls("json")
 
 
+class LlamaState:
+    """ Serialized execution state container matching llama_cpp.LlamaState."""
+
+    def __init__( self,
+            input_ids: Sequence[int],
+            scores: Any,
+            n_tokens: int,
+            llama_state: bytes,
+            llama_state_size: int,
+            seed: int,
+        ):
+        self.input_ids = input_ids
+        self.scores = scores
+        self.n_tokens = n_tokens
+        self.llama_state = llama_state
+        self.llama_state_size = llama_state_size
+        self.seed = seed
+
+
 class Llama:
     """ High-level Python wrapper around the compiled llamojo engine.\n
     Mirrors the `llama_cpp.Llama` API closely for drop-in compatibility.
@@ -257,6 +276,10 @@ class Llama:
         self.n_layer = _CallableInt(self._n_layer)
         self.n_head = _CallableInt(self._n_head)
 
+        # Token and state tracking
+        self.input_ids: List[int] = []
+        self.scores: Optional[Any] = None
+
         # Chat format resolution
         self.chat_format = chat_format
         self.chat_handler = chat_handler
@@ -404,6 +427,66 @@ class Llama:
         """ Reset KV cache and internal context state."""
         if hasattr(self, "_ctx") and self._ctx:
             self._lib.llama_kv_cache_clear(self._ctx)
+        self.input_ids = []
+        self.scores = None
+
+    def save_state(self) -> LlamaState:
+        """ Save current context execution state (KV cache, tokens, and scores)."""
+        if not hasattr(self, "_ctx") or not self._ctx:
+            raise RuntimeError("Context is not initialized")
+
+        state_size = int(self._lib.llama_state_get_size(self._ctx))
+        state_buf = (ctypes.c_uint8 * state_size)()
+        n_bytes = self._lib.llama_state_get_data(
+            self._ctx,
+            ctypes.cast(state_buf, ctypes.POINTER(ctypes.c_uint8)),
+            state_size,
+        )
+        if n_bytes == 0:
+            raise RuntimeError("Failed to serialize context state")
+
+        scores_copy = None
+        if self.scores is not None:
+            if _NUMPY_AVAILABLE and isinstance(self.scores, np.ndarray):
+                scores_copy = self.scores.copy()
+            else:
+                scores_copy = list(self.scores)
+
+        return LlamaState(
+            input_ids=list(self.input_ids),
+            scores=scores_copy,
+            n_tokens=len(self.input_ids),
+            llama_state=bytes(state_buf[:n_bytes]),
+            llama_state_size=int(n_bytes),
+            seed=int(self.seed),
+        )
+
+    def load_state(self, state: LlamaState) -> None:
+        """ Restore context execution state from a LlamaState instance."""
+        if not hasattr(self, "_ctx") or not self._ctx:
+            raise RuntimeError("Context is not initialized")
+
+        state_bytes = state.llama_state
+        state_size = state.llama_state_size
+        buf = (ctypes.c_uint8 * state_size).from_buffer_copy(state_bytes)
+
+        ret = self._lib.llama_state_set_data(
+            self._ctx,
+            ctypes.cast(buf, ctypes.POINTER(ctypes.c_uint8)),
+            state_size,
+        )
+        if ret == 0:
+            raise RuntimeError("Failed to restore context state")
+
+        self.input_ids = list(state.input_ids)
+        if state.scores is not None:
+            if _NUMPY_AVAILABLE and isinstance(state.scores, np.ndarray):
+                self.scores = state.scores.copy()
+            else:
+                self.scores = list(state.scores)
+        else:
+            self.scores = None
+        self.seed = state.seed
 
     def token_bos(self) -> int:
         """ Return BOS token ID."""
@@ -454,16 +537,25 @@ class Llama:
         """ Evaluate a sequence of tokens in the model."""
         if not tokens:
             return
+        start_pos = len(self.input_ids)
         batch = self._lib.llama_batch_init(1, 0, 1)
         try:
             for i, tok in enumerate(tokens):
                 self._lib.llama_batch_set_token(
-                    batch, 0, tok, i, 0, (i == len(tokens) - 1)
+                    batch, 0, tok, start_pos + i, 0, (i == len(tokens) - 1)
                 )
                 self._lib.llama_batch_set_n_tokens(batch, 1)
                 ret = self._lib.llama_decode(self._ctx, batch)
                 if ret != 0:
                     raise RuntimeError(f"llama_decode failed at token {i}")
+            self.input_ids.extend(tokens)
+            logits_ptr = self._lib.llama_get_logits_ith(self._ctx, 0)
+            if logits_ptr:
+                addr = ctypes.cast(logits_ptr, ctypes.c_void_p).value
+                if _NUMPY_AVAILABLE:
+                    self.scores = np.ctypeslib.as_array((ctypes.c_float * self._n_vocab).from_address(addr)).copy()
+                else:
+                    self.scores = list((ctypes.c_float * self._n_vocab).from_address(addr))
         finally:
             self._lib.llama_batch_free(batch)
 
@@ -519,12 +611,20 @@ class Llama:
                 self._lib.llama_sampler_accept_token(smpl, next_tok)
                 yield next_tok
                 all_tokens.append(next_tok)
+                self.input_ids.append(next_tok)
                 self._lib.llama_batch_set_token(batch, 0, next_tok, curr_pos, 0, True)
                 self._lib.llama_batch_set_n_tokens(batch, 1)
                 ret = self._lib.llama_decode(self._ctx, batch)
                 if ret != 0:
                     break
                 curr_pos += 1
+            logits_ptr = self._lib.llama_get_logits_ith(self._ctx, 0)
+            if logits_ptr:
+                addr = ctypes.cast(logits_ptr, ctypes.c_void_p).value
+                if _NUMPY_AVAILABLE:
+                    self.scores = np.ctypeslib.as_array((ctypes.c_float * self._n_vocab).from_address(addr)).copy()
+                else:
+                    self.scores = list((ctypes.c_float * self._n_vocab).from_address(addr))
         finally:
             self._lib.llama_batch_free(batch)
             self._lib.llama_sampler_free(smpl)
@@ -769,16 +869,18 @@ class Llama:
             )
 
         # Batch decode prompt tokens
+        start_pos = len(self.input_ids)
         batch = self._lib.llama_batch_init(1, 0, 1)
         for i, tok in enumerate(tokens):
             self._lib.llama_batch_set_token(
-                batch, 0, tok, i, 0, (i == len(tokens) - 1)
+                batch, 0, tok, start_pos + i, 0, (i == len(tokens) - 1)
             )
             self._lib.llama_batch_set_n_tokens(batch, 1)
             ret = self._lib.llama_decode(self._ctx, batch)
             if ret != 0:
                 self._lib.llama_batch_free(batch)
                 raise RuntimeError(f"Decode failed at prompt token {i}")
+        self.input_ids.extend(tokens)
 
         smpl = self._build_sampler(temp=temperature, top_k=top_k, top_p=top_p, grammar=grammar)
 
@@ -832,8 +934,9 @@ class Llama:
                 break
 
             # Forward pass for next token
+            self.input_ids.append(next_tok)
             self._lib.llama_batch_set_token(
-                batch, 0, next_tok, len(tokens) + step, 0, True
+                batch, 0, next_tok, start_pos + len(tokens) + step, 0, True
             )
             self._lib.llama_batch_set_n_tokens(batch, 1)
             ret = self._lib.llama_decode(self._ctx, batch)

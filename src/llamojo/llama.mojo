@@ -37,8 +37,11 @@ from .types import (
     ModelConfig,
     null_ptr,
 )
+from ggojo.core.tensor import GojoTensor
 from ggojo.graph.walker import GojoGraph
 from ggojo.graph.blocks.transformer import TransformerBlockNode
+from ggojo.graph.blocks.gemma4 import Gemma4BlockNode
+from ggojo.graph.blocks.moe import MoEBlockNode, ExpertWeights
 from ggojo.core.arena import GojoContext, GojoInitParams
 from ggojo.io.llamojo_bridge import wrap_llamojo_buffer_1d, wrap_llamojo_buffer_2d
 from .gguf import (
@@ -391,24 +394,84 @@ struct llama_context(Movable):
                 var w_up = wrap_llamojo_buffer_2d(lw.w_up, lw.dtype_up, Int64(cfg.hidden_dim), Int64(cfg.intermediate_dim), "w_up")
                 var w_down = wrap_llamojo_buffer_2d(lw.w_down, lw.dtype_down, Int64(cfg.intermediate_dim), Int64(cfg.hidden_dim), "w_down")
 
-                var block = TransformerBlockNode(
-                    layer_idx=l,
-                    hidden_dim=cfg.hidden_dim,
-                    intermediate_dim=cfg.intermediate_dim,
-                    n_heads=cfg.n_heads,
-                    n_kv_heads=cfg.n_kv_heads,
-                    head_dim=cfg.head_dim,
-                    attn_norm_w=w_attn_norm,
-                    w_q=w_q,
-                    w_k=w_k,
-                    w_v=w_v,
-                    w_out=w_out,
-                    ffn_norm_w=w_ffn_norm,
-                    w_gate=w_gate,
-                    w_up=w_up,
-                    w_down=w_down,
-                )
-                self.macro_graph.add_transformer_layer(block)
+                if cfg.arch == "gemma4":
+                    var is_swa = (l % 5) != 4
+                    var head_d = 256 if is_swa else 512
+                    var ffn_d = 6144 if l < 15 else 12288
+                    var w_attn_q_norm = wrap_llamojo_buffer_1d(lw.attn_q_norm.unsafe_bitcast[UInt8](), GGMLType.F32, Int64(head_d), "attn_q_norm") if Int(lw.attn_q_norm) != 0 else GojoTensor(GGMLType.F32, 0)
+                    var w_attn_k_norm = wrap_llamojo_buffer_1d(lw.attn_k_norm.unsafe_bitcast[UInt8](), GGMLType.F32, Int64(head_d), "attn_k_norm") if Int(lw.attn_k_norm) != 0 else GojoTensor(GGMLType.F32, 0)
+                    var w_post_attn_norm = wrap_llamojo_buffer_1d(lw.post_attention_norm.unsafe_bitcast[UInt8](), GGMLType.F32, Int64(cfg.hidden_dim), "post_attention_norm") if Int(lw.post_attention_norm) != 0 else GojoTensor(GGMLType.F32, 0)
+                    var w_post_ffw_norm = wrap_llamojo_buffer_1d(lw.post_ffw_norm.unsafe_bitcast[UInt8](), GGMLType.F32, Int64(cfg.hidden_dim), "post_ffw_norm") if Int(lw.post_ffw_norm) != 0 else GojoTensor(GGMLType.F32, 0)
+                    var w_inp_gate = wrap_llamojo_buffer_2d(lw.inp_gate, lw.dtype_inp_gate, Int64(cfg.hidden_dim), Int64(cfg.ple_dim), "inp_gate") if Int(lw.inp_gate) != 0 else GojoTensor(GGMLType.F32, 0)
+                    var w_proj = wrap_llamojo_buffer_2d(lw.proj, lw.dtype_proj, Int64(cfg.ple_dim), Int64(cfg.hidden_dim), "proj") if Int(lw.proj) != 0 else GojoTensor(GGMLType.F32, 0)
+                    var w_post_norm = wrap_llamojo_buffer_1d(lw.post_norm.unsafe_bitcast[UInt8](), GGMLType.F32, Int64(cfg.hidden_dim), "post_norm") if Int(lw.post_norm) != 0 else GojoTensor(GGMLType.F32, 0)
+
+                    var gemma_block = Gemma4BlockNode(
+                        layer_idx=l,
+                        hidden_dim=cfg.hidden_dim,
+                        intermediate_dim=ffn_d,
+                        ple_dim=cfg.ple_dim if cfg.ple_dim > 0 else 256,
+                        n_heads=cfg.n_heads,
+                        n_kv_heads=cfg.n_kv_heads,
+                        head_dim=head_d,
+                        is_swa=is_swa,
+                        attn_norm_w=w_attn_norm,
+                        attn_q_norm_w=w_attn_q_norm,
+                        attn_k_norm_w=w_attn_k_norm,
+                        w_q=w_q,
+                        w_k=w_k,
+                        w_v=w_v,
+                        w_out=w_out,
+                        post_attention_norm_w=w_post_attn_norm,
+                        ffn_norm_w=w_ffn_norm,
+                        w_gate=w_gate,
+                        w_up=w_up,
+                        w_down=w_down,
+                        post_ffw_norm_w=w_post_ffw_norm,
+                        inp_gate=w_inp_gate,
+                        proj=w_proj,
+                        post_norm_w=w_post_norm,
+                    )
+                    self.macro_graph.add_gemma4_layer(gemma_block)
+                elif lw.is_moe:
+                    var w_router = wrap_llamojo_buffer_2d(lw.w_router.unsafe_bitcast[UInt8](), GGMLType.F32, Int64(cfg.hidden_dim), Int64(lw.n_experts), "w_router")
+                    var exp_list = List[ExpertWeights]()
+                    for e in range(lw.n_experts):
+                        var eg = wrap_llamojo_buffer_2d(lw.exp_gates_ptr[unsafe_offset=e], lw.dtype_gate, Int64(cfg.hidden_dim), Int64(cfg.intermediate_dim), "exp_gate")
+                        var eu = wrap_llamojo_buffer_2d(lw.exp_ups_ptr[unsafe_offset=e], lw.dtype_up, Int64(cfg.hidden_dim), Int64(cfg.intermediate_dim), "exp_up")
+                        var ed = wrap_llamojo_buffer_2d(lw.exp_downs_ptr[unsafe_offset=e], lw.dtype_down, Int64(cfg.intermediate_dim), Int64(cfg.hidden_dim), "exp_down")
+                        exp_list.append(ExpertWeights(eg, eu, ed))
+
+                    var moe_block = MoEBlockNode(
+                        layer_idx=l,
+                        hidden_dim=cfg.hidden_dim,
+                        intermediate_dim=cfg.intermediate_dim,
+                        n_experts=lw.n_experts,
+                        n_experts_used=lw.n_experts_used,
+                        w_router=w_router,
+                        ffn_norm_w=w_ffn_norm,
+                        experts=exp_list,
+                    )
+                    self.macro_graph.add_moe_layer(moe_block)
+                else:
+                    var block = TransformerBlockNode(
+                        layer_idx=l,
+                        hidden_dim=cfg.hidden_dim,
+                        intermediate_dim=cfg.intermediate_dim,
+                        n_heads=cfg.n_heads,
+                        n_kv_heads=cfg.n_kv_heads,
+                        head_dim=cfg.head_dim,
+                        attn_norm_w=w_attn_norm,
+                        w_q=w_q,
+                        w_k=w_k,
+                        w_v=w_v,
+                        w_out=w_out,
+                        ffn_norm_w=w_ffn_norm,
+                        w_gate=w_gate,
+                        w_up=w_up,
+                        w_down=w_down,
+                    )
+                    self.macro_graph.add_transformer_layer(block)
         else:
             self.gojo_ctx = GojoContext(GojoInitParams(mem_size=0, no_alloc=True))
 
@@ -875,6 +938,141 @@ def llama_kv_cache_seq_keep(ctx: llama_context_p, seq_id: llama_seq_id):
 def llama_kv_cache_seq_add(ctx: llama_context_p, seq_id: llama_seq_id, p0: llama_pos, p1: llama_pos, delta: llama_pos):
     if Int(ctx) != 0:
         ctx[].kv_cache.seq_add(seq_id, p0, p1, delta)
+
+# ─── Context State Serialization API (Gap 4: save_state & load_state) ────────
+
+@always_inline
+def llama_state_get_size(ctx: llama_context_p) -> UInt64:
+    """ Return exact byte size needed to serialize context state (KV cache + metadata)."""
+    if Int(ctx) == 0:
+        return 0
+    var total_layer_tokens = ctx[].kv_cache.n_layer_kv * ctx[].kv_cache.max_ctx
+    var kv_floats = total_layer_tokens * ctx[].kv_cache.kv_dim
+    var k_f32_bytes = kv_floats * 4
+    var v_f32_bytes = kv_floats * 4
+
+    var k_q8_bytes = 0
+    var v_q8_bytes = 0
+    if ctx[].kv_cache.type_k == GGMLType.Q8_0 or ctx[].kv_cache.type_v == GGMLType.Q8_0:
+        var bpt = (ctx[].kv_cache.kv_dim // 32) * 34
+        k_q8_bytes = total_layer_tokens * bpt
+        v_q8_bytes = total_layer_tokens * bpt
+
+    var cells_bytes = ctx[].kv_cache.max_ctx * 8
+    var header_bytes = 32  # magic(8) + n_tokens(8) + max_ctx(8) + total_payload(8)
+    return UInt64(header_bytes + cells_bytes + k_f32_bytes + v_f32_bytes + k_q8_bytes + v_q8_bytes)
+
+def llama_state_get_data(ctx: llama_context_p, dst: BytePtr, size: UInt64) -> UInt64:
+    """ Serialize context state into dst buffer. Returns number of bytes written."""
+    if Int(ctx) == 0 or Int(dst) == 0:
+        return 0
+    var needed = llama_state_get_size(ctx)
+    if size < needed:
+        return 0
+
+    var total_layer_tokens = ctx[].kv_cache.n_layer_kv * ctx[].kv_cache.max_ctx
+    var kv_floats = total_layer_tokens * ctx[].kv_cache.kv_dim
+    var k_f32_bytes = kv_floats * 4
+    var v_f32_bytes = kv_floats * 4
+
+    var k_q8_bytes = 0
+    var v_q8_bytes = 0
+    if ctx[].kv_cache.type_k == GGMLType.Q8_0 or ctx[].kv_cache.type_v == GGMLType.Q8_0:
+        var bpt = (ctx[].kv_cache.kv_dim // 32) * 34
+        k_q8_bytes = total_layer_tokens * bpt
+        v_q8_bytes = total_layer_tokens * bpt
+
+    var cells_bytes = ctx[].kv_cache.max_ctx * 8
+
+    # 1. Header (32 bytes)
+    var u64_ptr = dst.unsafe_bitcast[UInt64]()
+    u64_ptr[unsafe_offset=0] = 0x4C4C414D4F4A4F53  # "LLAMOJOS"
+    u64_ptr[unsafe_offset=1] = UInt64(ctx[].n_tokens)
+    u64_ptr[unsafe_offset=2] = UInt64(ctx[].kv_cache.max_ctx)
+    u64_ptr[unsafe_offset=3] = needed
+
+    var off: Int = 32
+
+    # 2. Cells metadata
+    unsafe_memcpy(dest=dst.unsafe_offset(off), src=ctx[].kv_cache.cells.unsafe_bitcast[UInt8](), count=cells_bytes)
+    off += cells_bytes
+
+    # 3. K f32 buffer
+    unsafe_memcpy(dest=dst.unsafe_offset(off), src=ctx[].kv_cache.k_f32.unsafe_bitcast[UInt8](), count=k_f32_bytes)
+    off += k_f32_bytes
+
+    # 4. V f32 buffer
+    unsafe_memcpy(dest=dst.unsafe_offset(off), src=ctx[].kv_cache.v_f32.unsafe_bitcast[UInt8](), count=v_f32_bytes)
+    off += v_f32_bytes
+
+    # 5. Q8 buffers if active
+    if k_q8_bytes > 0 and Int(ctx[].kv_cache.k_q8) != 0:
+        unsafe_memcpy(dest=dst.unsafe_offset(off), src=ctx[].kv_cache.k_q8, count=k_q8_bytes)
+        off += k_q8_bytes
+    if v_q8_bytes > 0 and Int(ctx[].kv_cache.v_q8) != 0:
+        unsafe_memcpy(dest=dst.unsafe_offset(off), src=ctx[].kv_cache.v_q8, count=v_q8_bytes)
+        off += v_q8_bytes
+
+    return UInt64(off)
+
+def llama_state_set_data(ctx: llama_context_p, src: BytePtr, size: UInt64) -> UInt64:
+    """ Restore context state from src buffer. Returns number of bytes read."""
+    if Int(ctx) == 0 or Int(src) == 0:
+        return 0
+    if size < 32:
+        return 0
+
+    var u64_ptr = src.unsafe_bitcast[UInt64]()
+    var magic = u64_ptr[unsafe_offset=0]
+    if magic != 0x4C4C414D4F4A4F53:
+        return 0
+
+    var saved_n_tokens = Int(u64_ptr[unsafe_offset=1])
+    var saved_max_ctx = Int(u64_ptr[unsafe_offset=2])
+    var expected_size = u64_ptr[unsafe_offset=3]
+
+    if saved_max_ctx != ctx[].kv_cache.max_ctx or size < expected_size:
+        return 0
+
+    var total_layer_tokens = ctx[].kv_cache.n_layer_kv * ctx[].kv_cache.max_ctx
+    var kv_floats = total_layer_tokens * ctx[].kv_cache.kv_dim
+    var k_f32_bytes = kv_floats * 4
+    var v_f32_bytes = kv_floats * 4
+
+    var k_q8_bytes = 0
+    var v_q8_bytes = 0
+    if ctx[].kv_cache.type_k == GGMLType.Q8_0 or ctx[].kv_cache.type_v == GGMLType.Q8_0:
+        var bpt = (ctx[].kv_cache.kv_dim // 32) * 34
+        k_q8_bytes = total_layer_tokens * bpt
+        v_q8_bytes = total_layer_tokens * bpt
+
+    var cells_bytes = ctx[].kv_cache.max_ctx * 8
+
+    ctx[].n_tokens = saved_n_tokens
+
+    var off: Int = 32
+
+    # 2. Cells metadata
+    unsafe_memcpy(dest=ctx[].kv_cache.cells.unsafe_bitcast[UInt8](), src=src.unsafe_offset(off), count=cells_bytes)
+    off += cells_bytes
+
+    # 3. K f32 buffer
+    unsafe_memcpy(dest=ctx[].kv_cache.k_f32.unsafe_bitcast[UInt8](), src=src.unsafe_offset(off), count=k_f32_bytes)
+    off += k_f32_bytes
+
+    # 4. V f32 buffer
+    unsafe_memcpy(dest=ctx[].kv_cache.v_f32.unsafe_bitcast[UInt8](), src=src.unsafe_offset(off), count=v_f32_bytes)
+    off += v_f32_bytes
+
+    # 5. Q8 buffers if active
+    if k_q8_bytes > 0 and Int(ctx[].kv_cache.k_q8) != 0:
+        unsafe_memcpy(dest=ctx[].kv_cache.k_q8, src=src.unsafe_offset(off), count=k_q8_bytes)
+        off += k_q8_bytes
+    if v_q8_bytes > 0 and Int(ctx[].kv_cache.v_q8) != 0:
+        unsafe_memcpy(dest=ctx[].kv_cache.v_q8, src=src.unsafe_offset(off), count=v_q8_bytes)
+        off += v_q8_bytes
+
+    return UInt64(off)
 
 # ─── Model Metadata & Architecture Reflection ────────────────────────────────
 

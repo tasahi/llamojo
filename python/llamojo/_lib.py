@@ -156,6 +156,24 @@ def get_lib() -> ctypes.CDLL:
     lib.llama_kv_cache_clear.argtypes = [ctypes.c_void_p]
     lib.llama_kv_cache_clear.restype = None
 
+    # Context State Serialization (Gap 4)
+    lib.llama_state_get_size.argtypes = [ctypes.c_void_p]
+    lib.llama_state_get_size.restype = ctypes.c_uint64
+
+    lib.llama_state_get_data.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint8),
+        ctypes.c_uint64,
+    ]
+    lib.llama_state_get_data.restype = ctypes.c_uint64
+
+    lib.llama_state_set_data.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint8),
+        ctypes.c_uint64,
+    ]
+    lib.llama_state_set_data.restype = ctypes.c_uint64
+
     # Samplers
     lib.llama_sampler_chain_init.argtypes = []
     lib.llama_sampler_chain_init.restype = ctypes.c_void_p

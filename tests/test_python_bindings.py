@@ -166,6 +166,35 @@ class TestLlamojoPython(unittest.TestCase):
         self.assertEqual(len(first_lp["token_logprobs"]), 1)
         self.assertGreaterEqual(len(first_lp["top_logprobs"][0]), 3)
 
+    def test_save_and_load_state(self):
+        """ Test KV cache and context state serialization and restoration (Gap 4)."""
+        prompt = "The capital of France is"
+        toks = self.llm.tokenize(prompt, add_bos=True)
+        self.llm.reset()
+        self.llm.eval(toks)
+        self.assertEqual(len(self.llm.input_ids), len(toks))
+
+        # Save state
+        saved = self.llm.save_state()
+        self.assertGreater(saved.llama_state_size, 0)
+        self.assertEqual(len(saved.llama_state), saved.llama_state_size)
+        self.assertEqual(saved.n_tokens, len(toks))
+
+        # Sample token 1 from evaluated context
+        tok1 = self.llm.sample(temp=0.0)
+
+        # Reset context and verify state is cleared
+        self.llm.reset()
+        self.assertEqual(len(self.llm.input_ids), 0)
+
+        # Restore state
+        self.llm.load_state(saved)
+        self.assertEqual(len(self.llm.input_ids), len(toks))
+
+        # Sample token 2 and ensure exact match with token 1
+        tok2 = self.llm.sample(temp=0.0)
+        self.assertEqual(tok1, tok2)
+
 
 if __name__ == "__main__":
     unittest.main()

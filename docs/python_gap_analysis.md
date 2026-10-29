@@ -13,7 +13,7 @@ Through automated reflection across `llama_cpp.Llama` and `llamojo.Llama`, we tr
 |---|:---:|:---:|---|
 | **Core Text Inference (`create_completion`, `__call__`)** | Yes | **Full** | Complete parity (prompt tokens, greedy/temp, stop sequences, OpenAI JSON response). |
 | **Streaming (`stream=True`)** | Yes | **Full** | Complete parity (token piece generator, stop sequence interruption). |
-| **Chat Completion (`create_chat_completion`)** | Yes | **Full** | ChatML template formatting and assistant role responses. |
+| **Chat Completion (`create_chat_completion`)** | Yes | **Full** | ChatML, Jinja2 auto-detection, and assistant role responses. |
 | **Embeddings (`embed`, `create_embedding`)** | Yes | **Full** | Vector generation and normalization, OpenAI list schema. |
 | **Tokenizer (`tokenize`, `detokenize`, `token_to_piece`)** | Yes | **Full** | SPM, BPE, byte fallback, special token control. |
 | **Low-Level Step Control (`eval`, `sample`, `generate`, `reset`)** | Yes | **Full** | Step-by-step token generation and KV cache management. |
@@ -24,13 +24,40 @@ Through automated reflection across `llama_cpp.Llama` and `llamojo.Llama`, we tr
 | **Logit Processors / Custom Biases (`logit_bias`, `logits_processor`)** | Yes | **Full** | `logit_bias` dict, `LogitsProcessorList`, `MinTokensLogitsProcessor`, zero-copy NumPy array views in C memory. |
 | **Model Chat Template Engines (Jinja2 / GGUF metadata templates)** | Yes | **Full** | Automatic GGUF `tokenizer.chat_template` extraction, `Jinja2ChatFormatter`, built-in templates (`llama-3`, `gemma`, `llama-2`, `mistral-instruct`, `chatml`), `register_chat_format`, and streaming chat chunks. |
 | **Logprob Computation (`logprobs=...`)** | Yes | **Full** | Numerically stable `logits_to_logprobs`, `logprobs=k` extraction for top alternatives, text offsets, and streaming chunk logprobs. |
-| **KV Cache Serialization (`save_state`, `load_state`)** | Yes | **Pending** | Persisting and restoring KV cache state between turns or process restarts. |
-| **OpenAI Compatible Web Server (`python -m llama_cpp.server`)** | Yes | **Pending** | FastAPI/Uvicorn server hosting `/v1/completions` and `/v1/chat/completions`. |
+| **KV Cache Serialization (`save_state`, `load_state`)** | Yes | **Full** | Persisting and restoring KV cache state between turns or process restarts via C-ABI `llama_state_*` and `LlamaState`. |
+| **Macro-Block Execution Backend (`use_macro_graph`)** | No (Exclusive) | **Full** | Native delegation to `ggojo`'s coarse-grained `GojoGraph` walker and `TransformerBlockNode` layers. |
+| **OpenAI Compatible Web Server (`python -m llamojo.server`)** | Yes | **Pending** | FastAPI/Uvicorn server hosting `/v1/models`, `/v1/completions`, and `/v1/chat/completions`. |
 | **GPU Acceleration (CUDA, Metal, Vulkan)** | Yes | **By Design (N/A)**| `llamojo` is intentionally an ultra-optimized, dependency-free pure CPU inference engine. |
 
 ---
 
 ## 2. Recently Closed Gaps
+
+### Closed: KV Cache State Serialization (`save_state` & `load_state`)
+- **Status**: **Fully Implemented**
+- **Details**: Added `llama_state_get_size`, `llama_state_get_data`, and `llama_state_set_data` to `src/llamojo/llama.mojo` and exported through `c_api.mojo`.
+- **Capabilities**:
+  - Implemented `LlamaState` in `python/llamojo/llama.py` container holding `input_ids`, `scores`, `n_tokens`, `llama_state` bytes, `llama_state_size`, and `seed`.
+  - Serializes a structured binary payload (`LLAMOJOS` magic signature, cell metadata table, and complete active $K$ and $V$ activation buffers).
+  - Calling `state = llm.save_state()` followed by `llm.reset()` and `llm.load_state(state)` restores exact token generation trajectories deterministically.
+- **Reference**: [`docs/python_kv_cache_serialization.md`](./python_kv_cache_serialization.md)
+
+### Closed: Logprob Computation (`logprobs=...`)
+- **Status**: **Fully Implemented**
+- **Details**: Numerically stable log softmax over context logits and top-$k$ candidate token extraction.
+- **Capabilities**:
+  - Top-$k$ alternative tokens returned with text offsets, token pieces, and logprob scores.
+  - Full compatibility with both non-streaming (`create_completion`) and chunked streaming (`stream=True`).
+- **Reference**: [`docs/python_logprobs.md`](./python_logprobs.md)
+
+### Closed: Model Chat Template Engines (Jinja2 & Built-in Formats)
+- **Status**: **Fully Implemented**
+- **Details**: Added `chat_format.py` supporting Jinja2 templates and built-in formatters.
+- **Capabilities**:
+  - Automatic extraction of `tokenizer.chat_template` from GGUF metadata via `extract_chat_template_from_gguf`.
+  - Built-in presets for ChatML, LLaMA-2/3, Mistral, and Gemma.
+  - Streaming chat completion chunks (`create_chat_completion(..., stream=True)`).
+- **Reference**: [`docs/python_chat_templates.md`](./python_chat_templates.md)
 
 ### Closed: HuggingFace Hub Integration (`Llama.from_pretrained`)
 - **Status**: **Fully Implemented**
@@ -39,7 +66,6 @@ Through automated reflection across `llama_cpp.Llama` and `llamojo.Llama`, we tr
   - Direct download and local cache management via `huggingface_hub.hf_hub_download`.
   - Wildcard / glob patterns (e.g. `filename="*Q4_K_M.gguf"`).
   - Automatic variant detection prioritizing `Q4_K_M`, `Q4_0`, and `Q8_0` when `filename` is omitted.
-  - Forwarding authentication tokens, custom `cache_dir`, `local_dir`, and revisions.
 - **Reference**: [`docs/python_from_pretrained.md`](./python_from_pretrained.md)
 
 ### Closed: Context & Model Property Accessors (`n_ctx()`, `n_embd()`, `n_vocab()`)
@@ -66,46 +92,22 @@ Through automated reflection across `llama_cpp.Llama` and `llamojo.Llama`, we tr
 
 ## 3. Detailed Breakdown of Remaining Pending Gaps
 
-### Gap 1: KV Cache State Serialization (`save_state` & `load_state`)
+### Gap 1: OpenAI-Compatible Web Server (`python -m llamojo.server`)
 - **Upstream Feature**:
-  ```python
-  state = llm.save_state()  # Returns LlamaState containing KV cache bytes & tokens
-  llm.load_state(state)     # Restores context state instantly
-  ```
-- **Current `llamojo` Behavior**: Has `reset()` to wipe the KV cache, but cannot serialize and restore the cache buffer across calls or process restarts.
-- **Implementation Effort**: **Medium (Mojo C-ABI + Python)**. Requires exporting `llama_state_get_size`, `llama_state_get_data`, and `llama_state_set_data` from `src/llamojo/c_api.mojo`.
+  Built-in CLI server for hosting local OpenAI-compatible REST API endpoints:
+  - `GET /v1/models`
+  - `POST /v1/completions`
+  - `POST /v1/chat/completions`
+  - `POST /v1/embeddings`
+- **Current `llamojo` Behavior**:
+  `llamojo` is currently used as a Python library. All core endpoint generation methods (`create_completion`, `create_chat_completion`, `create_embedding`) are already implemented and return 100% compliant OpenAI JSON schemas.
+- **Implementation Effort**:
+  **Low (Python-only)**. Requires adding a `python/llamojo/server.py` module leveraging `fastapi` and `uvicorn`, routing incoming HTTP POST requests directly to `llm.create_completion` and `llm.create_chat_completion`.
 
 ---
 
-### Gap 2: Dynamic Jinja2 Chat Formatter
-- **Upstream Feature**: Reads `tokenizer.chat_template` from GGUF metadata and formats `messages=[{"role": "user", ...}]` using the model's exact native prompt template (e.g., LLaMA-3 `<|start_header_id|>`, Mistral `[INST]`, Gemma `<start_of_turn>`).
-- **Current `llamojo` Behavior**: Formats messages using the standard ChatML template `<|im_start|>role\ncontent<|im_end|>`.
-- **Implementation Effort**: **Low (Python-only)**. Can parse `tokenizer.chat_template` or inspect model architecture to apply Jinja2 templates via `jinja2`.
+## 4. Summary Roadmap
 
----
-
-### Gap 3: Logprobs Computation (`logprobs=...`)
-- **Upstream Feature**:
-  - `logprobs: Optional[int] = 5`: Returns the top 5 token log probabilities and chosen token logprob in completion output choices.
-- **Current `llamojo` Behavior**: `logprobs: None`.
-- **Implementation Effort**: **Medium**. Softmax over logits at each step, extracting the top-$k$ log probabilities into the choices dictionary.
-
----
-
-### Gap 4: OpenAI-Compatible Web Server (`python -m llamojo.server`)
-- **Upstream Feature**: Built-in CLI server for running local OpenAI-compatible endpoints (`/v1/models`, `/v1/completions`, `/v1/chat/completions`).
-- **Current `llamojo` Behavior**: Python library only.
-- **Implementation Effort**: **Low-Medium (Python-only)**. FastAPI / Uvicorn wrapper around `llamojo.Llama`.
-
----
-
-## 4. Next Implementation Priorities
-
-1. **KV Cache State Serialization (`save_state`, `load_state`)**:
-   - Add C-ABI export functions in `src/llamojo/c_api.mojo`.
-   - Rebuild `libllamojo.so` via `tools/build_shared_lib.sh`.
-   - Expose `LlamaState`, `save_state()`, and `load_state()` in `python/llamojo/llama.py`.
-2. **Dynamic Jinja2 Chat Templates**:
-   - Extract GGUF chat template metadata or apply model-type heuristics.
-3. **Logprob Computation**:
-   - Return top candidate log probabilities in `create_completion`.
+With KV Cache serialization (`save_state`/`load_state`), Jinja2 Chat Templates, Logprobs, HuggingFace Hub downloads, Logit Biases, and GBNF Grammars completely closed:
+1. **Inference Core Parity**: **100% Complete** with `llama-cpp-python`.
+2. **Next Enhancement**: Implement the optional standalone CLI web server (`python -m llamojo.server`).
