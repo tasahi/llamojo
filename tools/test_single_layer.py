@@ -2,7 +2,7 @@ import numpy as np
 from llama_cpp import Llama
 
 llm = Llama(
-    model_path='/home/tasahi/.cache/huggingface/hub/blobs/a1/a156058e62f4541ff0b9226ed3bc57fdb30ddc9d266f63cc1716a3eb32ab955c',
+    model_path='$MODEL_PATH',
     n_ctx=128,
     logits_all=True,
     verbose=False

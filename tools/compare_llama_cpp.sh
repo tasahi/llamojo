@@ -6,8 +6,8 @@
 
 set -e
 
-PYTHON_BIN="/home/tasahi/miniconda/envs/moj/bin/python3"
-MOJO_BIN="/home/tasahi/miniconda/envs/moj/bin/mojo"
+PYTHON_BIN="bin/python3"
+MOJO_BIN="bin/mojo"
 
 MODEL="${1:-data/smollm2-135m-q4_k_m.gguf}"
 PROMPT="${2:-Once upon a time}"

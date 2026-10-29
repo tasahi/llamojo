@@ -23,7 +23,7 @@ from llamojo import (
 
 def eval_tokens(tokens: List[llama_token]) raises:
     llama_backend_init()
-    var model_path = "/home/tasahi/.cache/huggingface/hub/blobs/a1/a156058e62f4541ff0b9226ed3bc57fdb30ddc9d266f63cc1716a3eb32ab955c"
+    var model_path = "$MODEL_PATH"
     var mparams = llama_model_default_params()
     var model = llama_model_load_from_file(model_path, mparams)
     var cparams = llama_context_default_params()

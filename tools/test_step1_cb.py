@@ -36,7 +36,7 @@ c_callback = cb_type(callback)
 
 mparams = llama_cpp.llama_model_default_params()
 model = llama_cpp.llama_model_load_from_file(
-    b"/home/tasahi/.cache/huggingface/hub/blobs/a1/a156058e62f4541ff0b9226ed3bc57fdb30ddc9d266f63cc1716a3eb32ab955c",
+    b"$MODEL_PATH",
     mparams
 )
 

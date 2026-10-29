@@ -25,7 +25,7 @@ from llamojo import (
 )
 
 def main():
-    var model_path = "/home/tasahi/.cache/huggingface/hub/blobs/a1/a156058e62f4541ff0b9226ed3bc57fdb30ddc9d266f63cc1716a3eb32ab955c"
+    var model_path = "$MODEL_PATH"
     var prompt = "Once upon a time"
     var n_predict = 16
 

@@ -2,7 +2,7 @@
 # Compare Gemma 4 inference between llama.cpp and llamojo
 set -e
 
-PYTHON_BIN="/home/tasahi/miniconda/envs/moj/bin/python"
+PYTHON_BIN="bin/python"
 
 MODEL_PATH=$($PYTHON_BIN -c '
 import glob, os
@@ -29,7 +29,7 @@ echo ""
 echo ">>> [1/2] Running llama.cpp Reference Test..."
 $PYTHON_BIN tools/test_gemma4.py --model "$MODEL_PATH" -p "$PROMPT" -n "$MAX_TOKENS"
 
-MOJO_BIN="/home/tasahi/miniconda/envs/moj/bin/mojo"
+MOJO_BIN="bin/mojo"
 
 echo ""
 echo ">>> [2/2] Running llamojo CLI Loader..."

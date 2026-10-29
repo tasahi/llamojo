@@ -4,7 +4,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-MOJO_BIN="${MOJO_BIN:-/home/tasahi/miniconda/envs/moj/bin/mojo}"
+MOJO_BIN="${MOJO_BIN:-bin/mojo}"
 INCLUDE_FLAGS="-I src -I vendor/llama2.mojo -I vendor/MojoLlama/src"
 
 TESTS=(

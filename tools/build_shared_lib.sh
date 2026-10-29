@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_ROOT"
 
-MOJO_BIN="${MOJO_BIN:-/home/tasahi/miniconda/envs/moj/bin/mojo}"
+MOJO_BIN="${MOJO_BIN:-bin/mojo}"
 OUTPUT_LIB="${1:-build/libllamojo.so}"
 
 mkdir -p "$(dirname "$OUTPUT_LIB")"

@@ -17,7 +17,7 @@ from llamojo.backend.kernels_norm_rope import rms_norm
 def main():
     llama_backend_init()
     var mp = llama_model_default_params()
-    var model = llama_model_load_from_file("/home/tasahi/.cache/huggingface/hub/blobs/a1/a156058e62f4541ff0b9226ed3bc57fdb30ddc9d266f63cc1716a3eb32ab955c", mp)
+    var model = llama_model_load_from_file("$MODEL_PATH", mp)
     var cp = llama_context_default_params()
     cp.n_ctx = 64
     var ctx = llama_init_from_model(model, cp)
