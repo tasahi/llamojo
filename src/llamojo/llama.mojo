@@ -37,6 +37,10 @@ from .types import (
     ModelConfig,
     null_ptr,
 )
+from ggojo.graph.walker import GojoGraph
+from ggojo.graph.blocks.transformer import TransformerBlockNode
+from ggojo.core.arena import GojoContext, GojoInitParams
+from ggojo.io.llamojo_bridge import wrap_llamojo_buffer_1d, wrap_llamojo_buffer_2d
 from .gguf import (
     BytePtr,
     GGUFValue,
@@ -314,6 +318,11 @@ struct llama_context(Movable):
     var gate_buf: FloatPtr
     var proj_buf: FloatPtr
 
+    # Macro-block execution graph (Gap 1: ggojo delegation)
+    var macro_graph: GojoGraph
+    var gojo_ctx: GojoContext
+    var use_macro_graph: Bool
+
     var allocated: Bool
 
     def __init__(out self, model: llama_model_p, params: llama_context_params):
@@ -325,6 +334,7 @@ struct llama_context(Movable):
         self.hidden_dim = cfg.intermediate_dim
         self.vocab_size = cfg.vocab_size
         self.n_tokens = 0
+        self.use_macro_graph = params.use_macro_graph
 
         # Initialize KV Cache (with shared KV layers support for architectures like Gemma 4)
         self.kv_cache = LlamaKVCache(
@@ -364,6 +374,44 @@ struct llama_context(Movable):
         self.gate_buf = unsafe_alloc[Float32](ple_dim)
         self.proj_buf = unsafe_alloc[Float32](self.dim)
 
+        # Initialize ggojo Macro-Block Graph and Context Arena
+        self.macro_graph = GojoGraph()
+        if self.use_macro_graph:
+            self.gojo_ctx = GojoContext(GojoInitParams(mem_size=32 * 1024 * 1024))
+            for l in range(cfg.n_layers):
+                var lw = model[].layers[l].copy()
+                var w_attn_norm = wrap_llamojo_buffer_1d(lw.attn_norm.unsafe_bitcast[UInt8](), GGMLType.F32, Int64(cfg.hidden_dim), "attn_norm")
+                var w_q = wrap_llamojo_buffer_2d(lw.wq, lw.dtype_q, Int64(cfg.hidden_dim), Int64(cfg.n_heads * cfg.head_dim), "wq")
+                var w_k = wrap_llamojo_buffer_2d(lw.wk, lw.dtype_k, Int64(cfg.hidden_dim), Int64(cfg.n_kv_heads * cfg.head_dim), "wk")
+                var w_v = wrap_llamojo_buffer_2d(lw.wv, lw.dtype_v, Int64(cfg.hidden_dim), Int64(cfg.n_kv_heads * cfg.head_dim), "wv")
+                var w_out = wrap_llamojo_buffer_2d(lw.wo, lw.dtype_o, Int64(cfg.n_heads * cfg.head_dim), Int64(cfg.hidden_dim), "wo")
+
+                var w_ffn_norm = wrap_llamojo_buffer_1d(lw.ffn_norm.unsafe_bitcast[UInt8](), GGMLType.F32, Int64(cfg.hidden_dim), "ffn_norm")
+                var w_gate = wrap_llamojo_buffer_2d(lw.w_gate, lw.dtype_gate, Int64(cfg.hidden_dim), Int64(cfg.intermediate_dim), "w_gate")
+                var w_up = wrap_llamojo_buffer_2d(lw.w_up, lw.dtype_up, Int64(cfg.hidden_dim), Int64(cfg.intermediate_dim), "w_up")
+                var w_down = wrap_llamojo_buffer_2d(lw.w_down, lw.dtype_down, Int64(cfg.intermediate_dim), Int64(cfg.hidden_dim), "w_down")
+
+                var block = TransformerBlockNode(
+                    layer_idx=l,
+                    hidden_dim=cfg.hidden_dim,
+                    intermediate_dim=cfg.intermediate_dim,
+                    n_heads=cfg.n_heads,
+                    n_kv_heads=cfg.n_kv_heads,
+                    head_dim=cfg.head_dim,
+                    attn_norm_w=w_attn_norm,
+                    w_q=w_q,
+                    w_k=w_k,
+                    w_v=w_v,
+                    w_out=w_out,
+                    ffn_norm_w=w_ffn_norm,
+                    w_gate=w_gate,
+                    w_up=w_up,
+                    w_down=w_down,
+                )
+                self.macro_graph.add_transformer_layer(block)
+        else:
+            self.gojo_ctx = GojoContext(GojoInitParams(mem_size=0, no_alloc=True))
+
         var n_batch = Int(params.n_batch) if params.n_batch > 0 else 512
         var logits_size = max(1, self.vocab_size) * n_batch
         self.logits = unsafe_alloc[Float32](logits_size)
@@ -378,6 +426,8 @@ struct llama_context(Movable):
 
     def deinit_storage(mut self):
         if self.allocated:
+            if self.use_macro_graph:
+                self.gojo_ctx.free()
             self.x.unsafe_free()
             self.xb.unsafe_free()
             self.xb2.unsafe_free()
@@ -466,6 +516,7 @@ def llama_context_default_params() -> llama_context_params:
         embeddings=False,
         offload_kqv=True,
         flash_attn=False,
+        use_macro_graph=False,
     )
 
 def llama_model_quantize_default_params() -> llama_model_quantize_params:
@@ -701,34 +752,45 @@ def llama_decode(ctx: llama_context_p, batch: llama_batch) -> Int32:
                 dequantize_row(emb_type, row_ptr, ctx[].x, dim)
 
             # Step 2: Multi-layer transformer forward passes
-            for l in range(cfg.n_layers):
-                var lw = model[].layers[l].copy()
-                def worker_fn(wid: Int) {imm}:
-                    forward_layer_dense(
-                        l,
-                        pos,
-                        lw,
-                        cfg,
-                        ctx[].x,
-                        ctx[].xb,
-                        ctx[].xb2,
-                        ctx[].hb,
-                        ctx[].hb2,
-                        ctx[].q,
-                        ctx[].k_buf,
-                        ctx[].v_buf,
-                        ctx[].att_buf,
-                        ctx[].kv_cache.k_f32,
-                        ctx[].kv_cache.v_f32,
-                        ctx[].max_ctx,
-                        wid,
-                        sh,
-                    )
+            if ctx[].use_macro_graph:
+                try:
+                    ctx[].gojo_ctx.reset()
+                    var inp_t = wrap_llamojo_buffer_1d(ctx[].x.unsafe_bitcast[UInt8](), GGMLType.F32, Int64(dim), "x_in")
+                    var out_t = ctx[].macro_graph.compute_forward(inp_t, ctx[].gojo_ctx)
+                    var out_ptr = out_t.data.unsafe_bitcast[Float32]()
+                    for i in range(dim):
+                        ctx[].x[unsafe_offset=i] = out_ptr[unsafe_offset=i]
+                except:
+                    pass
+            else:
+                for l in range(cfg.n_layers):
+                    var lw = model[].layers[l].copy()
+                    def worker_fn(wid: Int) {imm}:
+                        forward_layer_dense(
+                            l,
+                            pos,
+                            lw,
+                            cfg,
+                            ctx[].x,
+                            ctx[].xb,
+                            ctx[].xb2,
+                            ctx[].hb,
+                            ctx[].hb2,
+                            ctx[].q,
+                            ctx[].k_buf,
+                            ctx[].v_buf,
+                            ctx[].att_buf,
+                            ctx[].kv_cache.k_f32,
+                            ctx[].kv_cache.v_f32,
+                            ctx[].max_ctx,
+                            wid,
+                            sh,
+                        )
 
-                if workers == 1:
-                    worker_fn(0)
-                else:
-                    parallelize(worker_fn, workers, workers)
+                    if workers == 1:
+                        worker_fn(0)
+                    else:
+                        parallelize(worker_fn, workers, workers)
 
             # Step 3: Compute final logits if requested for this token index
             if batch.logits[unsafe_offset=tok_idx] != 0:

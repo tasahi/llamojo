@@ -205,6 +205,7 @@ class Llama:
             lora_scale: float = 1.0,
             chat_format: Optional[str] = None,
             chat_handler: Optional[ChatFormatter] = None,
+            use_macro_graph: bool = False,
             verbose: bool = False,
             **kwargs: Any,
         ):
@@ -212,6 +213,7 @@ class Llama:
         self._n_ctx = n_ctx
         self._n_batch = n_batch
         self._n_threads = n_threads or 2
+        self._use_macro_graph = use_macro_graph
         self.verbose = verbose
         self.seed = kwargs.get("seed", 42)
 
@@ -234,7 +236,7 @@ class Llama:
             raise RuntimeError("Failed to extract model vocabulary")
 
         self._ctx = self._lib.llama_init_from_model(
-            self._model, self._n_ctx, self._n_batch, self._n_threads
+            self._model, self._n_ctx, self._n_batch, self._n_threads, self._use_macro_graph
         )
         if not self._ctx:
             self._lib.llama_vocab_free(self._vocab)

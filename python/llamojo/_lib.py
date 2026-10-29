@@ -117,6 +117,7 @@ def get_lib() -> ctypes.CDLL:
         ctypes.c_uint32,
         ctypes.c_uint32,
         ctypes.c_int32,
+        ctypes.c_bool,
     ]
     lib.llama_init_from_model.restype = ctypes.c_void_p
 
