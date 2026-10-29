@@ -248,7 +248,6 @@ def llama_init_from_model(
         n_ctx: UInt32 = 2048,
         n_batch: UInt32 = 512,
         n_threads: Int32 = 2,
-        use_macro_graph: Bool = False,
     ) abi("c") -> llama_context_p:
     """ Create an inference context for the model."""
     if Int(model) == 0:
@@ -257,7 +256,6 @@ def llama_init_from_model(
     cparams.n_ctx = n_ctx
     cparams.n_batch = n_batch
     cparams.n_threads = n_threads
-    cparams.use_macro_graph = use_macro_graph
     return _init_from_model(model, cparams)
 
 @export

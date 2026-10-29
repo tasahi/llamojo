@@ -25,7 +25,6 @@ Through automated reflection across `llama_cpp.Llama` and `llamojo.Llama`, we tr
 | **Model Chat Template Engines (Jinja2 / GGUF metadata templates)** | Yes | **Full** | Automatic GGUF `tokenizer.chat_template` extraction, `Jinja2ChatFormatter`, built-in templates (`llama-3`, `gemma`, `llama-2`, `mistral-instruct`, `chatml`), `register_chat_format`, and streaming chat chunks. |
 | **Logprob Computation (`logprobs=...`)** | Yes | **Full** | Numerically stable `logits_to_logprobs`, `logprobs=k` extraction for top alternatives, text offsets, and streaming chunk logprobs. |
 | **KV Cache Serialization (`save_state`, `load_state`)** | Yes | **Full** | Persisting and restoring KV cache state between turns or process restarts via C-ABI `llama_state_*` and `LlamaState`. |
-| **Macro-Block Execution Backend (`use_macro_graph`)** | No (Exclusive) | **Full** | Native delegation to `ggojo`'s coarse-grained `GojoGraph` walker and `TransformerBlockNode` layers. |
 | **OpenAI Compatible Web Server (`python -m llamojo.server`)** | Yes | **Pending** | FastAPI/Uvicorn server hosting `/v1/models`, `/v1/completions`, and `/v1/chat/completions`. |
 | **GPU Acceleration (CUDA, Metal, Vulkan)** | Yes | **By Design (N/A)**| `llamojo` is intentionally an ultra-optimized, dependency-free pure CPU inference engine. |
 

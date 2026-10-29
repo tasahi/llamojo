@@ -280,7 +280,6 @@ struct llama_context_params(ImplicitlyCopyable, Copyable, Movable):
     var embeddings: Bool
     var offload_kqv: Bool
     var flash_attn: Bool
-    var use_macro_graph: Bool
 
 @fieldwise_init
 struct llama_model_quantize_params(ImplicitlyCopyable, Copyable, Movable):

@@ -17,7 +17,7 @@ This document identifies the **5 architectural and functional gaps** that must b
 | # | Gap Area | Current State in `llamojo` | Capability in `ggojo` | Integration Gap | Priority |
 |---|---|---|---|---|:---:|
 | **1** | **Backend Execution Delegation** | `llama.mojo` supports both procedural loops and `GojoGraph` macro-nodes. | `GojoGraph` executes macro-nodes (`TransformerBlockNode`). | Fully implemented via `use_macro_graph: Bool` in `llama_context_params` and `Llama(use_macro_graph=True)`. | **Closed** |
-| **2** | **Unified KV Cache Representation** | `llamojo/kv_cache.mojo` uses flat/paged custom buffer pointers (`PageTable`, `KVCache`). | `ggojo` handles KV caches via direct tensor pointer views (`wrap_llamojo_buffer_2d`). | `ggojo`'s `TransformerBlockNode` needs native support for non-contiguous PagedAttention page tables. | **Open (High)** |
+| **2** | **Unified KV Cache Representation** | `llamojo/kv_cache.mojo` implements `PagedKVView` over flat and `PageTable` memory blocks. | `ggojo` implements `PagedKVView` and `paged_gqa_decode` supporting sliding-window attention and non-contiguous page dereferencing. | Fully unified: `TransformerBlockNode` and `Gemma4BlockNode` execute via `PagedKVView` across both non-contiguous and flat allocations. | **Closed** |
 | **3** | **Multi-Architecture Macro Blocks** | `llama.mojo` dispatches to `Gemma4BlockNode` and `MoEBlockNode` based on model config. | Implemented `Gemma4BlockNode` (PLE, per-head norm, GELU FFN) and `MoEBlockNode` (Router, Top-K, multi-expert FFN). | Fully implemented and wired into `GojoGraph` in both `ggojo` and `llamojo`. | **Closed** |
 | **4** | **KV Cache State Serialization (`save_state`/`load_state`)** | Fully implemented via C-ABI `llama_state_*` and `LlamaState`. | Context serialization with binary state format (`LLAMOJOS`) and zero-copy byte serialization. | Wire `llama_state_get_size`, `llama_state_get_data`, and `llama_state_set_data` to `llamojo`'s `save_state` and `load_state`. | **Closed** |
 | **5** | **Build & Packaging Dependency** | `tools/build_shared_lib.sh` includes `-I $GGOJO_ROOT/src`. | `ggojo` is accessible directly on the compiler include search path. | Build script links and includes `ggojo` cleanly to produce unified `libllamojo.so`. | **Closed** |
@@ -57,11 +57,12 @@ This document identifies the **5 architectural and functional gaps** that must b
 ---
 
 ### Gap 2: Harmonizing PagedAttention & Sliding Window KV Cache
-* **The Issue**:
-  `llamojo` features advanced non-contiguous `PageTable` memory allocation and sliding window attention to support deep context windows and batched prompts without memory fragmentation.
-  `ggojo`'s `TransformerBlockNode` currently assumes standard continuous memory pointers for K and V buffers.
-* **The Solution**:
-  Extend `ggojo`'s `TransformerBlockNode` to accept `PageTable` indices or strided 3D/4D tensor views (`wrap_llamojo_buffer_2d`) when executing attention projections.
+* **Status**: **Closed**
+* **Resolution**:
+  - Implemented `PagedKVView` in [`ggojo/src/ggojo/core/kv_paged.mojo`](file:///mnt/c/Documents/Mojo/ggojo/src/ggojo/core/kv_paged.mojo) providing indirect physical memory resolution via `logical_map` page tables as well as flat contiguous fallbacks.
+  - Implemented `paged_gqa_decode` kernel in [`ggojo/src/ggojo/kernels/attn.mojo`](file:///mnt/c/Documents/Mojo/ggojo/src/ggojo/kernels/attn.mojo) supporting Grouped-Query Attention, causal masking, and rolling Sliding Window Attention (SWA).
+  - Extended `TransformerBlockNode` and `Gemma4BlockNode` to accept `PagedKVView` instances.
+  - Added `get_paged_view(layer, sliding_window)` to `LlamaKVCache` in [`src/llamojo/kv_cache.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/kv_cache.mojo) and integrated it directly into macro-block graph initialization in [`src/llamojo/llama.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/llama.mojo).
 
 ---
 
