@@ -5,18 +5,18 @@
 This document evaluates the feasibility and modular architectural design for natively managing the **mmBERT / Gemma 2 tokenizer** within the **`llamojo`** library (`/mnt/c/Documents/Mojo/llamojo`).
 
 ### Key Findings
-- **High Feasibility (~80% Already Implemented)**: `llamojo` already contains the core building blocks for SentencePiece BPE and Gemma-family tokenization in [`src/llamojo/vocab.mojo`](../src/llamojo/vocab.mojo) (developed during the Gemma 4 integration).
-- **Modular `vocab_*.mojo` File Separation**: Rather than keeping all tokenization engines inside a monolithic `vocab.mojo`, the vocabulary subsystem will be cleanly partitioned into three focused files:
-  1. **`src/llamojo/vocab.mojo`**: Core vocabulary struct (`llama_vocab`), GGUF metadata loading, special-token registration/pre-splitting, detokenization, top-level routing (`tokenize_text`), and the public `llama.h` C-compatible API.
-  2. **`src/llamojo/vocab_gpt2.mojo`**: GPT-2 / English ModernBERT byte-level BPE encoding functions (`get_gpt2_byte_table`, `split_gpt2_chunks`, `tokenize_gpt2_bpe`).
-  3. **`src/llamojo/vocab_gemma.mojo` (or `vocab_spm.mojo`)**: SentencePiece / Gemma 2 / Gemma 4 / mmBERT BPE encoding functions (`_SpmSymbol`, `_SpmBigram`, `tokenize_gemma_bpe`, `tokenize_spm`).
+- **High Feasibility (~80% Already Implemented)**: `llamojo` already contains the core building blocks for SentencePiece BPE and Gemma-family tokenization in [`src/llamojo/vocab.mojo`](../src/llamojo/vocab.mojo) and [`src/llamojo/vocab_gemma.mojo`](../src/llamojo/vocab_gemma.mojo).
+- **Modular `vocab_*.mojo` File Separation (Phases 1 & 2 Completed ✅)**: Rather than keeping all tokenization engines inside a monolithic `vocab.mojo`, the vocabulary subsystem is cleanly partitioned into three focused files:
+  1. **[`src/llamojo/vocab.mojo`](../src/llamojo/vocab.mojo)**: Core vocabulary struct (`llama_vocab`), GGUF metadata loading, special-token registration/pre-splitting, detokenization, top-level routing (`tokenize_text`), and the public `llama.h` C-compatible API.
+  2. **[`src/llamojo/vocab_gpt2.mojo`](../src/llamojo/vocab_gpt2.mojo) (Completed ✅)**: GPT-2 / English ModernBERT byte-level BPE encoding functions (`get_gpt2_byte_table`, `split_gpt2_chunks`, `tokenize_gpt2_bpe`).
+  3. **[`src/llamojo/vocab_gemma.mojo`](../src/llamojo/vocab_gemma.mojo) (Completed ✅)**: SentencePiece / Gemma 2 / Gemma 4 / mmBERT BPE encoding functions (`_SpmSymbol`, `_SpmBigram`, `normalize_spm_spaces`, `encode_hex_byte_fallback`, `tokenize_gemma_bpe`, `tokenize_spm`).
 - **Clean Architectural Boundary**: Keeping all text normalization, special token splitting (`<opt_0>`...`<opt_15>`), and BPE/SentencePiece merging inside `llamojo` preserves the strict boundary where `ggojo` acts purely as the mathematical tensor/autodiff engine (`ggml` equivalent) and `llamojo` acts as the runtime, vocabulary, and model lifecycle manager (`llama.cpp` equivalent).
-- **Targeted Enhancements Needed**:
-  1. Modular extraction of GPT-2 BPE into `vocab_gpt2.mojo` and SentencePiece/Gemma BPE into `vocab_gemma.mojo`.
-  2. Model type routing in `vocab.mojo` for `gemma2` / `modernbert` / `mmbert` (respecting `add_space_prefix == False` without dummy prefix space injection).
-  3. Bidirectional encoder special-token framing (`[<bos>, ..., <eos>]`).
-  4. Pre-tokenization splitting of special/control tokens (`parse_special=True` for `<opt_k>` and `<mask>`).
-  5. Byte-fallback (`<0xXX>`) and doubly-linked symbol priority-queue merge optimization for large $256,000$-token vocabularies in `vocab_gemma.mojo`.
+- **Targeted Enhancements & Current Progress**:
+  1. ✅ Modular extraction of GPT-2 BPE into `vocab_gpt2.mojo` and SentencePiece/Gemma BPE into `vocab_gemma.mojo`.
+  2. ✅ Model type routing in `vocab.mojo` for `gemma2` / `modernbert` / `mmbert` (respecting `add_space_prefix == False` without dummy prefix space injection).
+  3. ⏳ Bidirectional encoder special-token framing (`[<bos>, ..., <eos>]`) (Phase 3).
+  4. ⏳ Pre-tokenization splitting of special/control tokens (`parse_special=True` for `<opt_k>` and `<mask>`) (Phase 3).
+  5. ✅ Byte-fallback (`<0xXX>`) and doubly-linked symbol priority-queue merge optimization for large $256,000$-token vocabularies in `vocab_gemma.mojo`.
 
 ---
 
@@ -71,16 +71,16 @@ Houses the SentencePiece and Gemma-family (Gemma 2, Gemma 4, mmBERT, LLaMA SPM) 
 
 While existing code is very close, four specific gaps must be addressed during the modular split to make `llamojo` the universal tokenizer for mmBERT and Laya:
 
-### Gap 1: Tokenizer Model-Type Routing & Leading Space Rules
-* **Current Behavior**:
-  - In `llama_vocab.__init__` (`vocab.mojo:414-427`), if `tokenizer.ggml.model` is `"llama"`, it routes to `tokenize_spm`, which unconditionally prepends a leading `▁` (`var norm_text = sp_marker` at line 788).
-  - Conversely, `tokenize_bpe` only activates the Gemma `\u2581` path if `model_type == "gemma4"`.
-* **Required Change**:
-  - In `vocab.mojo`, read GGUF metadata `tokenizer.ggml.add_space_prefix` (defaulting to `False` for `"gemma"`, `"gemma2"`, `"gemma4"`, `"mmbert"`, `"modernbert"`).
-  - Route GPT-2 models (`model_type == "gpt2"`) to `vocab_gpt2.tokenize_gpt2_bpe` and Gemma / mmBERT / SPM models to `vocab_gemma.tokenize_gemma_bpe` / `tokenize_spm`.
-  - Ensure that when Gemma 2 / mmBERT is loaded (whether via `scores` or `merges`), spaces are converted to `\u2581` **without** injecting a leading `\u2581` at index 0.
+### Gap 1: Tokenizer Model-Type Routing & Leading Space Rules (Resolved in Phase 2 ✅)
+* **Previous Behavior**:
+  - In `llama_vocab.__init__`, if `tokenizer.ggml.model` was `"llama"`, it routed to `tokenize_spm`, which unconditionally prepended a leading `▁`.
+  - Conversely, `tokenize_bpe` only activated the Gemma `\u2581` path if `model_type == "gemma4"`.
+* **Implemented Solution**:
+  - In [`src/llamojo/vocab.mojo`](../src/llamojo/vocab.mojo), `llama_vocab` now reads GGUF metadata `tokenizer.ggml.add_space_prefix` (defaulting to `False` for `"gemma"`, `"gemma2"`, `"gemma4"`, `"mmbert"`, `"modernbert"`).
+  - Routes GPT-2 models (`model_type == "gpt2"`) to `vocab_gpt2.tokenize_gpt2_bpe` and Gemma / mmBERT / SPM models to `vocab_gemma.tokenize_gemma_bpe` / `tokenize_spm`.
+  - Converts ASCII spaces to `\u2581` via `normalize_spm_spaces` **without** injecting a leading `\u2581` at index 0 when `add_space_prefix == False`.
 
-### Gap 2: Special & Atomic Option Token Splitting (`parse_special`)
+### Gap 2: Special & Atomic Option Token Splitting (`parse_special`) (Planned in Phase 3 ⏳)
 * **Current Behavior**:
   - `tokenize_text` accepts `parse_special: Bool = False`, but neither `tokenize_bpe` nor `tokenize_spm` currently inspects `parse_special` to split out atomic special strings before BPE character decomposition.
   - If a Laya prompt contains `"Options: <opt_0> Refund <opt_1> Escalate"`, the BPE engine will split `<opt_0>` into individual characters (`<`, `o`, `p`, `t`, `_`, `0`, `>`) instead of matching the single atomic token ID for `<opt_0>`.
@@ -88,7 +88,7 @@ While existing code is very close, four specific gaps must be addressed during t
   - Implement a pre-tokenization pass in `vocab.mojo` when `parse_special == True` (using tokens marked as `TOKEN_TYPE_CONTROL` / `TOKEN_TYPE_USER_DEFINED` in `tokenizer.ggml.token_type` or registered via `add_special_token`).
   - Scan the input text for registered special tokens (`<bos>`, `<eos>`, `<mask>`, `<opt_0>` .. `<opt_15>`) and partition the string into `[RawTextSegment, SpecialTokenID, RawTextSegment, ...]`, dispatching only the `RawTextSegment` spans to `vocab_gemma.mojo` or `vocab_gpt2.mojo`.
 
-### Gap 3: Encoder Framing (`add_eos` / `[SEP]` Appending)
+### Gap 3: Encoder Framing (`add_eos` / `[SEP]` Appending) (Planned in Phase 3 ⏳)
 * **Current Behavior**:
   - Causal decoders (LLaMA, Gemma) only prepend `bos_id` when `add_special == True`.
   - Bidirectional encoders (ModernBERT, mmBERT) require **both** a leading `<bos>` (`2`) and a trailing `<eos>` (`1`) when `add_special == True`.
@@ -96,11 +96,11 @@ While existing code is very close, four specific gaps must be addressed during t
   - In `vocab.mojo`, read `tokenizer.ggml.add_eos_token` (or default `add_eos = True` when `general.architecture == "modernbert"` or `"mmbert"`).
   - Append `vocab[].eos_id` at the end of the token list in `tokenize_text` when `add_special == True` and `vocab[].add_eos == True`.
 
-### Gap 4: Byte Fallback & Linked-List Merging in the Gemma BPE Path
-* **Current Behavior**:
-  - `tokenize_spm` has `<0xXX>` byte fallback (`vocab.mojo:910-921`), but the Gemma `merge_ranks` loop (`vocab.mojo:637-641`) simply drops tokens if `vocab[].find_token(u_chars[p_i]) == -1` and uses an $O(N^2)$ list reallocation loop.
-* **Required Change**:
-  - In `vocab_gemma.mojo`, unify the Gemma merge-rank and SPM score-based BPE engines around `_SpmSymbol` doubly-linked lists and `encode_hex_byte_fallback` so rare emojis or non-BMP UTF-8 bytes in multilingual inputs decompose into `<0xXX>` tokens rather than being skipped.
+### Gap 4: Byte Fallback & Linked-List Merging in the Gemma BPE Path (Resolved in Phase 2 ✅)
+* **Previous Behavior**:
+  - `tokenize_spm` had `<0xXX>` byte fallback, but the Gemma `merge_ranks` loop simply dropped tokens if `vocab[].find_token(u_chars[p_i]) == -1` and used an $O(N^2)$ list reallocation loop.
+* **Implemented Solution**:
+  - In [`src/llamojo/vocab_gemma.mojo`](../src/llamojo/vocab_gemma.mojo), unified the Gemma merge-rank and SPM score-based BPE engines around `_SpmSymbol` doubly-linked lists (`_merge_spm_symbols`) and `encode_hex_byte_fallback` so rare emojis or multi-byte UTF-8 characters in multilingual inputs decompose into `<0xXX>` tokens rather than being skipped.
 
 ---
 
@@ -182,12 +182,12 @@ This mirrors Hugging Face's `tokenizer.add_special_tokens({"additional_special_t
 
 ## 7. Phased Roadmap
 
-| Phase | Target File(s) | Description | Effort |
-| :--- | :--- | :--- | :--- |
-| **Phase 1: Extract GPT-2 BPE Module** | `src/llamojo/vocab_gpt2.mojo`, `src/llamojo/vocab.mojo` | Move `get_gpt2_byte_table`, `split_gpt2_chunks`, and GPT-2 byte-level BPE merge logic into `vocab_gpt2.mojo` (`tokenize_gpt2_bpe`). Keep `vocab.mojo` as the loader and router. | ~150 LOC moved |
-| **Phase 2: Extract & Enhance mmBERT / Gemma 2 BPE Module** | `src/llamojo/vocab_gemma.mojo`, `src/llamojo/vocab.mojo` | Move SentencePiece and Gemma BPE encoding into `vocab_gemma.mojo` (`tokenize_gemma_bpe`, `tokenize_spm`). Support `add_space_prefix=False` (no leading dummy `▁`), unify `<0xXX>` byte fallback, and support both merge-ranks and SPM scores via `_SpmSymbol`. | ~220 LOC |
-| **Phase 3: Special Token Pre-Splitter & Encoder Framing** | `src/llamojo/vocab.mojo`, `src/llamojo/__init__.mojo` | Add `add_eos` and `add_space_prefix` flags to `llama_vocab`; implement `add_special_token()` and `parse_special=True` pre-splitter in `vocab.mojo` to isolate `<opt_k>`, `<mask>`, `<bos>`, `<eos>` before dispatching spans to `vocab_gemma` or `vocab_gpt2`. Re-export symbols in `__init__.mojo`. | ~110 LOC |
-| **Phase 4: Parity Verification Suite & C-API Integration** | `tests/test_vocab_sampler.mojo`, `src/llamojo/c_api.mojo` | Verify 100% token-ID parity between `llamojo` native tokenization and Hugging Face `AutoTokenizer.from_pretrained("jhu-clsp/mmBERT-base")` on English, Spanish (`es-ES`), UTF-8 emojis, and Laya `<opt_k>` prompts. Expose special token registration in `c_api.mojo`. | ~100 LOC |
+| Phase | Target File(s) | Description | Status | Effort |
+| :--- | :--- | :--- | :---: | :--- |
+| **Phase 1: Extract GPT-2 BPE Module** | [`src/llamojo/vocab_gpt2.mojo`](../src/llamojo/vocab_gpt2.mojo), [`src/llamojo/vocab.mojo`](../src/llamojo/vocab.mojo) | Move `get_gpt2_byte_table`, `split_gpt2_chunks`, and GPT-2 byte-level BPE merge logic into `vocab_gpt2.mojo` (`tokenize_gpt2_bpe`). Keep `vocab.mojo` as the loader and router. | **Completed ✅** | ~150 LOC moved |
+| **Phase 2: Extract & Enhance mmBERT / Gemma 2 BPE Module** | [`src/llamojo/vocab_gemma.mojo`](../src/llamojo/vocab_gemma.mojo), [`src/llamojo/vocab.mojo`](../src/llamojo/vocab.mojo) | Move SentencePiece and Gemma BPE encoding into `vocab_gemma.mojo` (`tokenize_gemma_bpe`, `tokenize_spm`). Support `add_space_prefix=False` (no leading dummy `▁`), unify `<0xXX>` byte fallback, and support both merge-ranks and SPM scores via `_SpmSymbol`. | **Completed ✅** | ~220 LOC |
+| **Phase 3: Special Token Pre-Splitter & Encoder Framing** | [`src/llamojo/vocab.mojo`](../src/llamojo/vocab.mojo), [`src/llamojo/__init__.mojo`](../src/llamojo/__init__.mojo) | Add `add_eos` flag to `llama_vocab`; implement `add_special_token()` and `parse_special=True` pre-splitter in `vocab.mojo` to isolate `<opt_k>`, `<mask>`, `<bos>`, `<eos>` before dispatching spans to `vocab_gemma` or `vocab_gpt2`. Re-export symbols in `__init__.mojo`. | **Pending ⏳** | ~110 LOC |
+| **Phase 4: Parity Verification Suite & C-API Integration** | [`tests/test_vocab_sampler.mojo`](../tests/test_vocab_sampler.mojo), [`src/llamojo/c_api.mojo`](../src/llamojo/c_api.mojo) | Verify 100% token-ID parity between `llamojo` native tokenization and Hugging Face `AutoTokenizer.from_pretrained("jhu-clsp/mmBERT-base")` on English, Spanish (`es-ES`), UTF-8 emojis, and Laya `<opt_k>` prompts. Expose special token registration in `c_api.mojo`. | **Pending ⏳** | ~100 LOC |
 
 ---
 

@@ -126,6 +126,11 @@ from .vocab_gpt2 import (
     split_gpt2_chunks,
     tokenize_gpt2_bpe,
 )
+from .vocab_gemma import (
+    normalize_spm_spaces,
+    encode_hex_byte_fallback,
+    tokenize_gemma_bpe,
+)
 from .sampler import (
     llama_sampler,
     llama_sampler_p,

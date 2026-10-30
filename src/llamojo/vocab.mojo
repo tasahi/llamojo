@@ -21,6 +21,14 @@ from std.memory.alloc import unsafe_alloc
 from .types import llama_token, null_ptr
 from .gguf import GGUFContext
 from .vocab_gpt2 import get_gpt2_byte_table, split_gpt2_chunks, tokenize_gpt2_bpe
+from .vocab_gemma import (
+    _SpmSymbol,
+    _SpmBigram,
+    normalize_spm_spaces,
+    encode_hex_byte_fallback,
+    tokenize_gemma_bpe,
+    tokenize_spm,
+)
 
 comptime CharList = List[UInt8]
 
@@ -39,6 +47,7 @@ struct llama_vocab(Movable):
     var token_to_id: Dict[String, Int32]
     var merge_ranks: Dict[String, Int]
     var add_bos: Bool
+    var add_space_prefix: Bool
     var bos_id: llama_token
     var eos_id: llama_token
     var eot_id: llama_token
@@ -55,6 +64,7 @@ struct llama_vocab(Movable):
         self.token_to_id = Dict[String, Int32]()
         self.merge_ranks = Dict[String, Int]()
         self.add_bos = True
+        self.add_space_prefix = True
         self.bos_id = 1
         self.eos_id = 2
         self.eot_id = -1
@@ -106,6 +116,25 @@ struct llama_vocab(Movable):
         self.vocab_size = len(self.tokens)
         for i in range(self.vocab_size):
             self.token_to_id[self.tokens[i]] = Int32(i)
+
+        var arch = gguf.get_string("general.architecture", "llama")
+        var default_space_prefix = True
+        if (
+            self.model_type == "gemma"
+            or self.model_type == "gemma2"
+            or self.model_type == "gemma-2"
+            or self.model_type == "gemma4"
+            or self.model_type == "gemma-4"
+            or self.model_type == "mmbert"
+            or self.model_type == "modernbert"
+            or arch == "gemma"
+            or arch == "gemma2"
+            or arch == "gemma4"
+            or arch == "modernbert"
+            or arch == "mmbert"
+        ):
+            default_space_prefix = False
+        self.add_space_prefix = gguf.get_bool("tokenizer.ggml.add_space_prefix", default_space_prefix)
 
         self.add_bos = gguf.get_bool("tokenizer.ggml.add_bos_token", True)
         if self.model_type == "gemma4" or self.model_type == "gemma-4":
@@ -224,73 +253,18 @@ def tokenize_bpe(
     if text.byte_length() == 0:
         return tokens^
 
-    if (vocab[].model_type == "gemma4" or vocab[].model_type == "gemma-4") and len(vocab[].merge_ranks) > 0:
-        # Gemma 4 SPM-style BPE:
-        # 1. Replace spaces with SentencePiece marker \u2581 (0xE2 0x96 0x81)
-        var sp_marker = "\u2581"
-        var norm_text = String("")
-        var n_bytes = text.byte_length()
-        var t_ptr = text.unsafe_ptr()
-        for i in range(n_bytes):
-            if t_ptr[unsafe_offset=i] == 32:
-                norm_text += sp_marker
-            else:
-                norm_text += String(text[byte=i:i + 1])
-
-        # 2. Split into UTF-8 codepoints
-        var blen = norm_text.byte_length()
-        var norm_ptr = norm_text.unsafe_ptr()
-        var u_chars = List[String]()
-        var offs = 0
-        while offs < blen:
-            var b = norm_ptr[unsafe_offset=offs]
-            var clen = 1
-            if (b & 0x80) == 0:
-                clen = 1
-            elif (b & 0xE0) == 0xC0:
-                clen = 2
-            elif (b & 0xF0) == 0xE0:
-                clen = 3
-            elif (b & 0xF8) == 0xF0:
-                clen = 4
-            clen = min(clen, blen - offs)
-            u_chars.append(String(norm_text[byte=offs:offs + clen]))
-            offs += clen
-
-        # 3. Iteratively merge highest-priority (lowest rank) bigrams from merge_ranks
-        while len(u_chars) > 1:
-            var best_rank = 1000000000
-            var best_idx = -1
-            var best_merged = String("")
-
-            for i in range(len(u_chars) - 1):
-                var c0 = u_chars[i]
-                var c1 = u_chars[i + 1]
-                var pair_str = c0 + " " + c1
-                var rank_opt = vocab[].merge_ranks.find(pair_str)
-                if rank_opt:
-                    var rank = rank_opt.value()
-                    if rank < best_rank:
-                        best_rank = rank
-                        best_idx = i
-                        best_merged = c0 + c1
-
-            if best_idx == -1:
-                break
-
-            var next_chars = List[String]()
-            for i in range(best_idx):
-                next_chars.append(u_chars[i])
-            next_chars.append(best_merged)
-            for i in range(best_idx + 2, len(u_chars)):
-                next_chars.append(u_chars[i])
-            u_chars = next_chars^
-
-        for p_i in range(len(u_chars)):
-            var tid = vocab[].find_token(u_chars[p_i])
-            if tid != -1:
-                tokens.append(tid)
-
+    if (
+        vocab[].model_type == "gemma"
+        or vocab[].model_type == "gemma2"
+        or vocab[].model_type == "gemma-2"
+        or vocab[].model_type == "gemma4"
+        or vocab[].model_type == "gemma-4"
+        or vocab[].model_type == "mmbert"
+        or vocab[].model_type == "modernbert"
+    ):
+        var gemma_tokens = tokenize_gemma_bpe(vocab, text)
+        for i in range(len(gemma_tokens)):
+            tokens.append(gemma_tokens[i])
         return tokens^
 
     if vocab[].model_type == "gpt2" and len(vocab[].merge_ranks) > 0:
@@ -344,193 +318,6 @@ def tokenize_bpe(
 
     return tokens^
 
-# ─── SentencePiece Unigram Tokenizer Engine (Viterbi Trellis) ───────────────
-
-# ─── SentencePiece (SPM) Bigram BPE Tokenizer ──────────────────────────────
-
-# ─── SentencePiece (SPM) Bigram BPE Tokenizer ──────────────────────────────
-
-struct _SpmSymbol(Copyable, Movable):
-    var text: String
-    var prev: Int
-    var next: Int
-    var n: Int
-
-    def __init__(out self, text: String, prev: Int, next: Int):
-        self.text = text
-        self.prev = prev
-        self.next = next
-        self.n = text.byte_length()
-
-struct _SpmBigram(ImplicitlyCopyable, Copyable, Movable):
-    var left: Int
-    var right: Int
-    var score: Float32
-    var size: Int
-
-    def __init__(out self, left: Int, right: Int, score: Float32, size: Int):
-        self.left = left
-        self.right = right
-        self.score = score
-        self.size = size
-
-def tokenize_spm(
-        vocab: llama_vocab_p,
-        text: String,
-        add_special: Bool = True,
-        parse_special: Bool = False,
-    ) -> List[llama_token]:
-    """ Tokenize UTF-8 string using SentencePiece SPM bigram merging matching llama.cpp."""
-    var tokens = List[llama_token]()
-    if Int(vocab) == 0:
-        return tokens^
-
-    if add_special and vocab[].add_bos and vocab[].bos_id >= 0:
-        tokens.append(vocab[].bos_id)
-
-    var n_bytes = text.byte_length()
-    if n_bytes == 0:
-        return tokens^
-
-    # Normalization: replace all spaces with SentencePiece marker \u2581 (0xE2 0x96 0x81) and prefix
-    var sp_marker = "\u2581"
-    var norm_text = sp_marker
-    var t_ptr = text.unsafe_ptr()
-    for i in range(n_bytes):
-        if t_ptr[unsafe_offset=i] == 32:
-            norm_text += sp_marker
-        else:
-            norm_text += String(text[byte=i:i + 1])
-
-    var blen = norm_text.byte_length()
-    if blen == 0:
-        return tokens^
-
-    # Split string into UTF-8 codepoints
-    var norm_ptr = norm_text.unsafe_ptr()
-    var symbols = List[_SpmSymbol]()
-    var offs = 0
-    var s_idx = 0
-
-    while offs < blen:
-        var b = norm_ptr[unsafe_offset=offs]
-        var clen = 1
-        if (b & 0x80) == 0:
-            clen = 1
-        elif (b & 0xE0) == 0xC0:
-            clen = 2
-        elif (b & 0xF0) == 0xE0:
-            clen = 3
-        elif (b & 0xF8) == 0xF0:
-            clen = 4
-        clen = min(clen, blen - offs)
-
-        var sym_str = String(norm_text[byte=offs:offs + clen])
-        var next_i = s_idx + 1 if (offs + clen < blen) else -1
-        symbols.append(_SpmSymbol(sym_str, s_idx - 1, next_i))
-        offs += clen
-        s_idx += 1
-
-    var n_syms = len(symbols)
-    if n_syms == 0:
-        return tokens^
-
-    # Queue of bigrams
-    var queue = List[_SpmBigram]()
-
-    for i in range(1, n_syms):
-        var left_text = symbols[i - 1].text
-        var right_text = symbols[i].text
-        var comb = left_text + right_text
-        var tok_id = vocab[].find_token(comb)
-        if tok_id != -1 and Int(tok_id) < vocab[].vocab_size:
-            var score = vocab[].scores[Int(tok_id)] if len(vocab[].scores) > Int(tok_id) else Float32(0.0)
-            queue.append(_SpmBigram(i - 1, i, score, comb.byte_length()))
-
-    # Iteratively merge highest-scoring bigram (tie-break on smaller left index)
-    while len(queue) > 0:
-        # Find best bigram in queue
-        var best_idx = 0
-        var best_score = queue[0].score
-        var best_left = queue[0].left
-
-        for q_i in range(1, len(queue)):
-            var item_ref = queue[q_i]
-            if (item_ref.score > best_score) or (item_ref.score == best_score and item_ref.left < best_left):
-                best_score = item_ref.score
-                best_left = item_ref.left
-                best_idx = q_i
-
-        var bg = queue[best_idx]
-        # Fast remove by swap-with-last (unordered queue)
-        queue[best_idx] = queue[len(queue) - 1]
-        _ = queue.pop()
-
-        var left_i = bg.left
-        var right_i = bg.right
-
-        # Check if already merged or invalidated
-        if symbols[left_i].n == 0 or symbols[right_i].n == 0:
-            continue
-        if symbols[left_i].n + symbols[right_i].n != bg.size:
-            continue
-
-        # Merge right into left
-        var r_text = symbols[right_i].text
-        symbols[left_i].text += r_text
-        symbols[left_i].n += symbols[right_i].n
-        symbols[right_i].n = 0
-
-        # Remove right from chain
-        var next_of_right = symbols[right_i].next
-        symbols[left_i].next = next_of_right
-        if next_of_right >= 0:
-            symbols[next_of_right].prev = left_i
-
-        # Try new bigrams with neighbors: (prev, left_i) and (left_i, next_of_right)
-        var prev_i = symbols[left_i].prev
-        if prev_i != -1:
-            var prev_text = symbols[prev_i].text
-            var curr_left_text = symbols[left_i].text
-            var comb_prev = prev_text + curr_left_text
-            var tok_prev = vocab[].find_token(comb_prev)
-            if tok_prev != -1 and Int(tok_prev) < vocab[].vocab_size:
-                var score = vocab[].scores[Int(tok_prev)] if len(vocab[].scores) > Int(tok_prev) else Float32(0.0)
-                queue.append(_SpmBigram(prev_i, left_i, score, comb_prev.byte_length()))
-
-        if next_of_right != -1:
-            var curr_left_text = symbols[left_i].text
-            var next_text = symbols[next_of_right].text
-            var comb_next = curr_left_text + next_text
-            var tok_next = vocab[].find_token(comb_next)
-            if tok_next != -1 and Int(tok_next) < vocab[].vocab_size:
-                var score = vocab[].scores[Int(tok_next)] if len(vocab[].scores) > Int(tok_next) else Float32(0.0)
-                queue.append(_SpmBigram(left_i, next_of_right, score, comb_next.byte_length()))
-
-    # Collect final tokens
-    var curr = 0
-    while curr != -1:
-        var sym_text = symbols[curr].text
-        var sym_n = symbols[curr].n
-        var tok_id = vocab[].find_token(sym_text)
-        if tok_id != -1:
-            tokens.append(tok_id)
-        else:
-            # Fallback to byte tokens or unk
-            var s_bytes = sym_text.unsafe_ptr()
-            for b_idx in range(sym_n):
-                var b = s_bytes[unsafe_offset=b_idx]
-                var hex_digits = "0123456789ABCDEF"
-                var h0 = String(hex_digits[byte=Int(b >> 4):Int((b >> 4) + 1)])
-                var h1 = String(hex_digits[byte=Int(b & 0x0F):Int((b & 0x0F) + 1)])
-                var hex_token = "<0x" + h0 + h1 + ">"
-                var byte_id = vocab[].find_token(hex_token)
-                if byte_id == -1:
-                    byte_id = vocab[].unk_id
-                tokens.append(byte_id)
-        curr = symbols[curr].next
-
-    return tokens^
 
 def tokenize_text(
         vocab: llama_vocab_p,
@@ -545,6 +332,7 @@ def tokenize_text(
         return tokenize_spm(vocab, text, add_special, parse_special)
     else:
         return tokenize_bpe(vocab, text, add_special, parse_special)
+
 
 def detokenize_text(
         vocab: llama_vocab_p,

@@ -55,15 +55,15 @@ Because this mapping is a 1-to-1 bijection, **any byte stream can be reversibly 
 
 ## 3. End-to-End Tokenization Pipeline in `llamojo`
 
-The tokenizer implementation in [`src/llamojo/vocab.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/vocab.mojo) executes four distinct stages:
+The GPT-2 byte-level BPE tokenizer is modularly split between [`src/llamojo/vocab_gpt2.mojo`](../src/llamojo/vocab_gpt2.mojo) (encoding engine) and [`src/llamojo/vocab.mojo`](../src/llamojo/vocab.mojo) (vocabulary loading, routing, and detokenization), executing four distinct stages:
 
 ```mermaid
 flowchart TD
     Input["Input Text: 'Once upon a time'"]
-    Chunker["Stage 1: Pre-Tokenization Word Chunking (split_gpt2_chunks)"]
-    ByteMap["Stage 2: Byte-to-Unicode Remapping (get_gpt2_byte_table)"]
-    Merge["Stage 3: Rank-Based Pair Merging (merge_ranks from GGUF)"]
-    IDLookup["Stage 4: Token ID Lookup & BOS Injection (llama_vocab.token_to_id)"]
+    Chunker["Stage 1: Pre-Tokenization Word Chunking (split_gpt2_chunks in vocab_gpt2.mojo)"]
+    ByteMap["Stage 2: Byte-to-Unicode Remapping (get_gpt2_byte_table in vocab_gpt2.mojo)"]
+    Merge["Stage 3: Rank-Based Pair Merging (tokenize_gpt2_bpe in vocab_gpt2.mojo)"]
+    IDLookup["Stage 4: Token ID Lookup & BOS Injection (llama_vocab in vocab.mojo)"]
     Output["Output Tokens: [6403, 1980, 253, 655]"]
 
     Input --> Chunker
@@ -80,7 +80,7 @@ Standard BPE does not merge across word boundaries or punctuation boundaries. Th
 - Numbers grouped up to 3 digits (e.g., `" 123"`)
 - Consecutive punctuation or whitespace blocks (e.g., `":\n   "`)
 
-In [`src/llamojo/vocab.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/vocab.mojo#L290-L380), this is implemented as an allocation-efficient, zero-external-dependency byte scanner:
+In [`src/llamojo/vocab_gpt2.mojo`](../src/llamojo/vocab_gpt2.mojo#L278-L365), this is implemented as an allocation-efficient, zero-external-dependency byte scanner:
 ```mojo
 def split_gpt2_chunks(text: String) -> List[String]:
     var chunks = List[String]()
@@ -91,7 +91,7 @@ def split_gpt2_chunks(text: String) -> List[String]:
 ```
 
 ### Stage 2: Byte-to-Unicode Remapping (`get_gpt2_byte_table`)
-Each byte in the chunk is replaced with its corresponding Unicode character from the precomputed 256-element table:
+Each byte in the chunk is replaced with its corresponding Unicode character from the precomputed 256-element table in [`src/llamojo/vocab_gpt2.mojo`](../src/llamojo/vocab_gpt2.mojo#L15-L275):
 ```mojo
 def get_gpt2_byte_table() -> List[String]:
     var t = List[String]()
@@ -105,9 +105,9 @@ def get_gpt2_byte_table() -> List[String]:
 For example, `" upon"` (bytes `[0x20, 0x75, 0x70, 0x6F, 0x6E]`) becomes the 5-character string:
 `['Ġ', 'u', 'p', 'o', 'n']`.
 
-### Stage 3: Rank-Based Pair Merging (`tokenize_bpe`)
+### Stage 3: Rank-Based Pair Merging (`tokenize_gpt2_bpe`)
 The GGUF file supplies a merge table `tokenizer.ggml.merges` consisting of ordered merge pairs (e.g. `'Ġ u'`, `'Ġu p'`, `'Ġup on'`).
-During vocabulary initialization, each merge rule is stored in `merge_ranks: Dict[String, Int]`:
+During vocabulary initialization in [`src/llamojo/vocab.mojo`](../src/llamojo/vocab.mojo), each merge rule is stored in `merge_ranks: Dict[String, Int]`. Then [`tokenize_gpt2_bpe`](../src/llamojo/vocab_gpt2.mojo#L368-L423) executes the merges:
 - Lower merge index = higher priority.
 - At each iteration, adjacent pairs `(chars[i], chars[i+1])` are queried in `merge_ranks`.
 - The pair with the lowest rank index is merged.
@@ -139,7 +139,7 @@ Raw token pieces stored in GGUF contain the byte-remapped characters (`Ġ`, `Ċ`
 ```
 
 ### Clean Translation in `token_to_piece_str`:
-In [`src/llamojo/vocab.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/vocab.mojo#L470-L515), `token_to_piece_str` performs an efficient UTF-8 byte translation:
+In [`src/llamojo/vocab.mojo`](../src/llamojo/vocab.mojo#L470-L515), `token_to_piece_str` performs an efficient UTF-8 byte translation:
 1. Detects occurrences of 2-byte UTF-8 sequences starting with `0xC4`:
    - `0xC4 0xA0` (`Ġ`) $\rightarrow$ ASCII Space `0x20` (`' '`)
    - `0xC4 0x8A` (`Ċ`) $\rightarrow$ ASCII Linefeed `0x0A` (`'\n'`)

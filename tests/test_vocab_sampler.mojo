@@ -280,6 +280,65 @@ def test_gpt2_bpe_module() raises:
     vocab.unsafe_free()
     print("  ✓ GPT-2 BPE module test passed")
 
+def test_gemma_mmbert_bpe_module() raises:
+    print("Testing Phase 2 Extracted mmBERT / Gemma 2 BPE Module (vocab_gemma.mojo)...")
+    var vocab = unsafe_alloc[llama_vocab](1)
+    vocab.unsafe_write(llama_vocab())
+    vocab[].model_type = "mmbert"
+    vocab[].vocab_type = VOCAB_TYPE_BPE
+    vocab[].add_bos = True
+    vocab[].add_space_prefix = False
+    vocab[].bos_id = 2
+    vocab[].eos_id = 1
+    vocab[].unk_id = 3
+
+    # Populate tokens:
+    # 0: <pad>, 1: <eos>, 2: <bos>, 3: <unk>
+    # 4: "h", 5: "e", 6: "l", 7: "o", 8: "\u2581", 9: "w", 10: "he", 11: "ll", 12: "hello", 13: "\u2581w", 14: "<0xF0>", 15: "<0x9F>"
+    var pieces = List[String]()
+    pieces.append("<pad>")    # 0
+    pieces.append("<eos>")    # 1
+    pieces.append("<bos>")    # 2
+    pieces.append("<unk>")    # 3
+    pieces.append("h")        # 4
+    pieces.append("e")        # 5
+    pieces.append("l")        # 6
+    pieces.append("o")        # 7
+    pieces.append("\u2581")   # 8
+    pieces.append("w")        # 9
+    pieces.append("he")       # 10
+    pieces.append("ll")       # 11
+    pieces.append("hell")     # 12
+    pieces.append("hello")    # 13
+    pieces.append("\u2581w")  # 14
+    pieces.append("<0xC3>")   # 15
+    pieces.append("<0xA9>")   # 16 ('é' in UTF-8 is 0xC3 0xA9)
+
+    for i in range(len(pieces)):
+        vocab[].tokens.append(pieces[i])
+        vocab[].scores.append(Float32(-i))
+        vocab[].token_to_id[pieces[i]] = Int32(i)
+    vocab[].vocab_size = len(vocab[].tokens)
+
+    vocab[].merge_ranks["h e"] = 0
+    vocab[].merge_ranks["l l"] = 1
+    vocab[].merge_ranks["he ll"] = 2
+    vocab[].merge_ranks["hell o"] = 3
+    vocab[].merge_ranks["\u2581 w"] = 4
+
+    # 1. Verify no leading dummy space (add_space_prefix=False) + internal space -> \u2581 + byte fallback (<0xC3><0xA9> for 'é')
+    var tokens = tokenize_text(vocab, "hello wé", True, False)
+    assert_equal(len(tokens), 5)
+    assert_equal(tokens[0], 2)  # <bos>
+    assert_equal(tokens[1], 13) # "hello" (NOT "\u2581hello")
+    assert_equal(tokens[2], 14) # "\u2581w"
+    assert_equal(tokens[3], 15) # "<0xC3>"
+    assert_equal(tokens[4], 16) # "<0xA9>"
+
+    vocab.unsafe_deinit_pointee()
+    vocab.unsafe_free()
+    print("  ✓ mmBERT / Gemma 2 BPE module test passed")
+
 def main() raises:
     print("============================================================")
     print("Running Phase 4, 5 & 7 Test Suite (Vocab, Sampler, SPM Unigram)")
@@ -287,6 +346,7 @@ def main() raises:
     test_vocab_tokenizer()
     test_spm_unigram_tokenizer()
     test_gpt2_bpe_module()
+    test_gemma_mmbert_bpe_module()
     test_sampler_chain()
     test_quantization_kernels()
     test_full_metadata_quantization()

@@ -21,6 +21,9 @@ A pure Mojo implementation of the `llama.cpp` library API and runtime, designed 
 │                          Core Subsystems                               │
 │  • types.mojo: llama.h types + upstream ggml.h enum & block sizes      │
 │  • gguf.mojo: In-place GGUF v2/v3 parser + zero-copy POSIX mmap64      │
+│  • vocab.mojo: GGUF vocab loader, detokenizer, & llama.h tokenizer API │
+│  • vocab_gpt2.mojo: GPT-2 / ModernBERT byte-level BPE encoding engine  │
+│  • vocab_gemma.mojo: Gemma 2 / Gemma 4 / mmBERT / SPM BPE engine       │
 ├────────────────────────────────────────────────────────────────────────┤
 │                     Backend Compute & Synchronization                  │
 │  • backend/threadpool.mojo: Persistent atomic spin-barrier pool        │
@@ -108,6 +111,11 @@ In Mojo 1.1.0, these are incorporated without modifying upstream repos:
 - Inference engine: `llama_decode`, `llama_encode`.
 - Logits & embeddings extraction: `llama_get_logits`, `llama_get_logits_ith`, `llama_get_embeddings`.
 - Model reflection: `llama_model_n_embd`, `llama_model_n_layer`, `llama_model_n_head`, `llama_model_n_head_kv`, `llama_model_n_ctx_train`, `llama_model_n_vocab`, `llama_model_desc`, `llama_model_meta_val_str`.
+
+### 9. Modular Vocabulary & Multi-Architecture Tokenization ([`src/llamojo/vocab.mojo`](./src/llamojo/vocab.mojo), [`vocab_gpt2.mojo`](./src/llamojo/vocab_gpt2.mojo), [`vocab_gemma.mojo`](./src/llamojo/vocab_gemma.mojo))
+- **[`src/llamojo/vocab.mojo`](./src/llamojo/vocab.mojo)**: GGUF vocabulary metadata loader (`llama_vocab`), model-type router (`tokenize_text`), UTF-8 piece decoder (`token_to_piece_str`), and public `llama.h` functions (`llama_tokenize`, `llama_detokenize`, `llama_token_to_piece`).
+- **[`src/llamojo/vocab_gpt2.mojo`](./src/llamojo/vocab_gpt2.mojo)**: GPT-2 / LLaMA-3 / Qwen / English ModernBERT byte-level BPE engine with 256-entry Unicode byte remapping (`get_gpt2_byte_table`), regex-equivalent chunk splitting (`split_gpt2_chunks`), and rank-based merging (`tokenize_gpt2_bpe`).
+- **[`src/llamojo/vocab_gemma.mojo`](./src/llamojo/vocab_gemma.mojo)**: SentencePiece and Gemma-family (`gemma2`, `gemma4`, `mmbert`, LLaMA SPM) BPE engine with doubly-linked UTF-8 symbol priority-queue merging (`_SpmSymbol`, `_SpmBigram`), configurable `\u2581` space normalization (`normalize_spm_spaces` with `add_space_prefix=False` for Gemma/mmBERT), and `<0xXX>` hexadecimal byte fallback (`encode_hex_byte_fallback`).
 
 ---
 
