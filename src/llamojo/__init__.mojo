@@ -121,6 +121,11 @@ from .vocab import (
     llama_vocab_type,
     llama_vocab_get_score,
 )
+from .vocab_gpt2 import (
+    get_gpt2_byte_table,
+    split_gpt2_chunks,
+    tokenize_gpt2_bpe,
+)
 from .sampler import (
     llama_sampler,
     llama_sampler_p,

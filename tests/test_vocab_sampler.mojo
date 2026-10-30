@@ -236,12 +236,57 @@ def test_spm_unigram_tokenizer() raises:
     vocab.unsafe_free()
     print("  ✓ SentencePiece Unigram Viterbi tokenizer passed")
 
+def test_gpt2_bpe_module() raises:
+    print("Testing Phase 1 Extracted GPT-2 Byte-Level BPE Module (vocab_gpt2.mojo)...")
+    var vocab = unsafe_alloc[llama_vocab](1)
+    vocab.unsafe_write(llama_vocab())
+    vocab[].model_type = "gpt2"
+    vocab[].vocab_type = VOCAB_TYPE_BPE
+    vocab[].add_bos = False
+
+    # Populate tokens: "h", "e", "l", "o", "\u0120" (Ġ), "w", "he", "ll", "hello", "\u0120w"
+    var pieces = List[String]()
+    pieces.append("<|endoftext|>") # 0
+    pieces.append("h")             # 1
+    pieces.append("e")             # 2
+    pieces.append("l")             # 3
+    pieces.append("o")             # 4
+    pieces.append("\u0120")        # 5 (' ')
+    pieces.append("w")             # 6
+    pieces.append("he")            # 7
+    pieces.append("ll")            # 8
+    pieces.append("hell")          # 9
+    pieces.append("hello")         # 10
+    pieces.append("\u0120w")       # 11
+
+    for i in range(len(pieces)):
+        vocab[].tokens.append(pieces[i])
+        vocab[].scores.append(0.0)
+        vocab[].token_to_id[pieces[i]] = Int32(i)
+    vocab[].vocab_size = len(vocab[].tokens)
+
+    vocab[].merge_ranks["h e"] = 0
+    vocab[].merge_ranks["l l"] = 1
+    vocab[].merge_ranks["he ll"] = 2
+    vocab[].merge_ranks["hell o"] = 3
+    vocab[].merge_ranks["\u0120 w"] = 4
+
+    var tokens = tokenize_text(vocab, "hello w", False, False)
+    assert_equal(len(tokens), 2)
+    assert_equal(tokens[0], 10) # "hello"
+    assert_equal(tokens[1], 11) # "\u0120w"
+
+    vocab.unsafe_deinit_pointee()
+    vocab.unsafe_free()
+    print("  ✓ GPT-2 BPE module test passed")
+
 def main() raises:
     print("============================================================")
     print("Running Phase 4, 5 & 7 Test Suite (Vocab, Sampler, SPM Unigram)")
     print("============================================================")
     test_vocab_tokenizer()
     test_spm_unigram_tokenizer()
+    test_gpt2_bpe_module()
     test_sampler_chain()
     test_quantization_kernels()
     test_full_metadata_quantization()
