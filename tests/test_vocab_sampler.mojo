@@ -29,6 +29,8 @@ from llamojo import (
     llama_vocab_eos,
     llama_vocab_type,
     llama_vocab_get_score,
+    llama_vocab_add_special_token,
+    llama_vocab_find_token,
     llama_token,
     llama_token_data,
     llama_token_data_array,
@@ -339,6 +341,111 @@ def test_gemma_mmbert_bpe_module() raises:
     vocab.unsafe_free()
     print("  ✓ mmBERT / Gemma 2 BPE module test passed")
 
+def test_mmbert_special_token_splitter_and_framing() raises:
+    print("Testing Phase 3 & 4 Special Token Pre-Splitter, Encoder Framing & Parity...")
+    var vocab = unsafe_alloc[llama_vocab](1)
+    vocab.unsafe_write(llama_vocab())
+    vocab[].model_type = "mmbert"
+    vocab[].vocab_type = VOCAB_TYPE_BPE
+    vocab[].add_bos = True
+    vocab[].add_eos = True
+    vocab[].add_space_prefix = False
+    vocab[].bos_id = 2
+    vocab[].eos_id = 1
+    vocab[].pad_id = 0
+    vocab[].unk_id = 3
+    vocab[].mask_id = 4
+
+    # Base vocabulary matching mmBERT / Gemma 2 conventions for English + Spanish ("Reembolso", "Escalar")
+    var pieces = List[String]()
+    pieces.append("<pad>")       # 0
+    pieces.append("<eos>")       # 1
+    pieces.append("<bos>")       # 2
+    pieces.append("<unk>")       # 3
+    pieces.append("<mask>")      # 4
+    pieces.append("R")           # 5
+    pieces.append("e")           # 6
+    pieces.append("m")           # 7
+    pieces.append("b")           # 8
+    pieces.append("o")           # 9
+    pieces.append("l")           # 10
+    pieces.append("s")           # 11
+    pieces.append("E")           # 12
+    pieces.append("c")           # 13
+    pieces.append("a")           # 14
+    pieces.append("r")           # 15
+    pieces.append("\u2581")      # 16
+    pieces.append("Re")          # 17
+    pieces.append("em")          # 18
+    pieces.append("Reem")        # 19
+    pieces.append("bolso")       # 20
+    pieces.append("\u2581Reem")  # 21
+    pieces.append("\u2581Reembolso") # 22
+    pieces.append("Es")          # 23
+    pieces.append("calar")       # 24
+    pieces.append("\u2581Es")    # 25
+    pieces.append("\u2581Escalar") # 26
+
+    for i in range(len(pieces)):
+        vocab[].tokens.append(pieces[i])
+        vocab[].scores.append(Float32(-i))
+        vocab[].token_types.append(Int32(3) if i <= 4 else Int32(1))
+        vocab[].token_to_id[pieces[i]] = Int32(i)
+    vocab[].vocab_size = len(vocab[].tokens)
+
+    # Register base control tokens in special_tokens
+    _ = llama_vocab_add_special_token(vocab, "<bos>", 3)
+    _ = llama_vocab_add_special_token(vocab, "<eos>", 3)
+    _ = llama_vocab_add_special_token(vocab, "<mask>", 3)
+
+    # Dynamically register Laya option tokens (<opt_0>, <opt_1>, <opt_10> to test longest-match)
+    var opt0_id = llama_vocab_add_special_token(vocab, "<opt_0>", 4)
+    var opt1_id = llama_vocab_add_special_token(vocab, "<opt_1>", 4)
+    var opt10_id = llama_vocab_add_special_token(vocab, "<opt_10>", 4)
+
+    assert_equal(opt0_id, 27)
+    assert_equal(opt1_id, 28)
+    assert_equal(opt10_id, 29)
+    assert_equal(llama_vocab_find_token(vocab, "<opt_10>"), 29)
+
+    vocab[].merge_ranks["\u2581 R"] = 0
+    vocab[].merge_ranks["\u2581R e"] = 1
+    vocab[].merge_ranks["e m"] = 2
+    vocab[].merge_ranks["\u2581Re em"] = 3
+    vocab[].merge_ranks["b o"] = 4
+    vocab[].merge_ranks["bo l"] = 5
+    vocab[].merge_ranks["bol s"] = 6
+    vocab[].merge_ranks["bols o"] = 7
+    vocab[].merge_ranks["\u2581Reem bolso"] = 8
+    vocab[].merge_ranks["\u2581 E"] = 9
+    vocab[].merge_ranks["\u2581E s"] = 10
+    vocab[].merge_ranks["c a"] = 11
+    vocab[].merge_ranks["ca l"] = 12
+    vocab[].merge_ranks["cal a"] = 13
+    vocab[].merge_ranks["cala r"] = 14
+    vocab[].merge_ranks["\u2581Es calar"] = 15
+
+    # Prompt with Spanish text, <mask>, and Laya <opt_0> / <opt_10> markers
+    var prompt = "<opt_0> Reembolso <opt_10> Escalar <mask>"
+    var toks = tokenize_text(vocab, prompt, add_special=True, parse_special=True)
+
+    # Expected sequence:
+    # [<bos> (2), <opt_0> (27), "\u2581Reembolso" (22), "\u2581" (16), <opt_10> (29), "\u2581Escalar" (26), "\u2581" (16), <mask> (4), <eos> (1)]
+    assert_equal(len(toks), 9)
+    assert_equal(toks[0], 2)       # <bos>
+    assert_equal(toks[1], opt0_id) # <opt_0>
+    assert_equal(toks[2], 22)      # "\u2581Reembolso"
+    assert_equal(toks[3], 16)      # "\u2581" (trailing space before <opt_10>)
+    assert_equal(toks[4], opt10_id)# <opt_10> (matched longest token, not <opt_1> + "0>")
+    assert_equal(toks[5], 26)      # "\u2581Escalar"
+    assert_equal(toks[6], 16)      # "\u2581"
+    assert_equal(toks[7], 4)       # <mask>
+    assert_equal(toks[8], 1)       # <eos> (bidirectional encoder framing!)
+
+    vocab.unsafe_deinit_pointee()
+    vocab.unsafe_free()
+    print("  ✓ Special token pre-splitter, longest-match & encoder framing test passed")
+
 def main() raises:
     print("============================================================")
     print("Running Phase 4, 5 & 7 Test Suite (Vocab, Sampler, SPM Unigram)")
@@ -347,6 +454,7 @@ def main() raises:
     test_spm_unigram_tokenizer()
     test_gpt2_bpe_module()
     test_gemma_mmbert_bpe_module()
+    test_mmbert_special_token_splitter_and_framing()
     test_sampler_chain()
     test_quantization_kernels()
     test_full_metadata_quantization()

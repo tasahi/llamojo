@@ -120,6 +120,8 @@ from .vocab import (
     llama_vocab_n_tokens,
     llama_vocab_type,
     llama_vocab_get_score,
+    llama_vocab_add_special_token,
+    llama_vocab_find_token,
 )
 from .vocab_gpt2 import (
     get_gpt2_byte_table,

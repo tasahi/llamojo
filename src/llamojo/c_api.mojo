@@ -75,6 +75,8 @@ from llamojo import (
     llama_vocab_eot as _vocab_eot,
     llama_vocab_is_eog as _vocab_is_eog,
     llama_vocab_n_tokens as _vocab_n_tokens,
+    llama_vocab_add_special_token as _vocab_add_special_token,
+    llama_vocab_find_token as _vocab_find_token,
     null_ptr,
 )
 
@@ -195,6 +197,29 @@ def llama_vocab_is_eog(vocab: llama_vocab_p, tok: llama_token) abi("c") -> Bool:
     return _vocab_is_eog(vocab, tok)
 
 @export
+def llama_vocab_add_special_token(
+        vocab: llama_vocab_p,
+        piece_cstr: BytePtr,
+        token_type: Int32 = 4,
+    ) abi("c") -> llama_token:
+    """ Dynamically register a special/control token (e.g., `<opt_0>`) into the vocabulary."""
+    if Int(vocab) == 0 or Int(piece_cstr) == 0:
+        return -1
+    var piece = _cstr_to_string(piece_cstr)
+    return _vocab_add_special_token(vocab, piece, token_type)
+
+@export
+def llama_vocab_find_token(
+        vocab: llama_vocab_p,
+        piece_cstr: BytePtr,
+    ) abi("c") -> llama_token:
+    """ Look up the token ID for an exact piece string."""
+    if Int(vocab) == 0 or Int(piece_cstr) == 0:
+        return -1
+    var piece = _cstr_to_string(piece_cstr)
+    return _vocab_find_token(vocab, piece)
+
+@export
 def llama_tokenize(
         vocab: llama_vocab_p,
         text_cstr: BytePtr,
@@ -204,12 +229,13 @@ def llama_tokenize(
         add_special: Bool,
         parse_special: Bool,
     ) abi("c") -> Int32:
-    """ Tokenize raw text into an array of tokens."""
-    if Int(vocab) == 0:
+    """ Tokenize raw UTF-8 text into an array of tokens."""
+    if Int(vocab) == 0 or Int(text_cstr) == 0 or text_len < 0:
         return 0
-    var s = String()
-    for i in range(Int(text_len)):
-        s += chr(Int(text_cstr[unsafe_offset=i]))
+    if text_len == 0:
+        return _tokenize(vocab, String(""), tokens_out, max_tokens, add_special, parse_special)
+    from std.collections import Span
+    var s = String(unsafe_from_utf8=Span(unsafe_ptr=text_cstr, length=Int(text_len)))
     return _tokenize(
         vocab,
         s,

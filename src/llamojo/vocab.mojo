@@ -46,13 +46,16 @@ struct llama_vocab(Movable):
     var token_types: List[Int32]
     var token_to_id: Dict[String, Int32]
     var merge_ranks: Dict[String, Int]
+    var special_tokens: List[String]
     var add_bos: Bool
+    var add_eos: Bool
     var add_space_prefix: Bool
     var bos_id: llama_token
     var eos_id: llama_token
     var eot_id: llama_token
     var pad_id: llama_token
     var unk_id: llama_token
+    var mask_id: llama_token
     var vocab_size: Int
 
     def __init__(out self):
@@ -63,13 +66,16 @@ struct llama_vocab(Movable):
         self.token_types = List[Int32]()
         self.token_to_id = Dict[String, Int32]()
         self.merge_ranks = Dict[String, Int]()
+        self.special_tokens = List[String]()
         self.add_bos = True
+        self.add_eos = False
         self.add_space_prefix = True
         self.bos_id = 1
         self.eos_id = 2
         self.eot_id = -1
         self.pad_id = -1
         self.unk_id = 0
+        self.mask_id = -1
         self.vocab_size = 0
 
     def __init__(out self, gguf: GGUFContext):
@@ -92,6 +98,7 @@ struct llama_vocab(Movable):
         self.token_types = List[Int32]()
         self.token_to_id = Dict[String, Int32]()
         self.merge_ranks = Dict[String, Int]()
+        self.special_tokens = List[String]()
 
         var tok_opt = gguf.metadata.find("tokenizer.ggml.tokens")
         if tok_opt:
@@ -116,6 +123,11 @@ struct llama_vocab(Movable):
         self.vocab_size = len(self.tokens)
         for i in range(self.vocab_size):
             self.token_to_id[self.tokens[i]] = Int32(i)
+            if i < len(self.token_types):
+                var t_type = self.token_types[i]
+                # 3 = CONTROL, 4 = USER_DEFINED
+                if (t_type == 3 or t_type == 4) and self.tokens[i].byte_length() > 0:
+                    self.special_tokens.append(self.tokens[i])
 
         var arch = gguf.get_string("general.architecture", "llama")
         var default_space_prefix = True
@@ -136,6 +148,18 @@ struct llama_vocab(Movable):
             default_space_prefix = False
         self.add_space_prefix = gguf.get_bool("tokenizer.ggml.add_space_prefix", default_space_prefix)
 
+        var default_add_eos = False
+        if (
+            self.model_type == "mmbert"
+            or self.model_type == "modernbert"
+            or self.model_type == "bert"
+            or arch == "modernbert"
+            or arch == "mmbert"
+            or arch == "bert"
+        ):
+            default_add_eos = True
+        self.add_eos = gguf.get_bool("tokenizer.ggml.add_eos_token", default_add_eos)
+
         self.add_bos = gguf.get_bool("tokenizer.ggml.add_bos_token", True)
         if self.model_type == "gemma4" or self.model_type == "gemma-4":
             # Workaround for Gemma 4 (matches upstream llama.cpp PR #21500):
@@ -146,6 +170,59 @@ struct llama_vocab(Movable):
         self.eot_id = Int32(gguf.get_int("tokenizer.ggml.eot_token_id", -1))
         self.pad_id = Int32(gguf.get_int("tokenizer.ggml.padding_token_id", -1))
         self.unk_id = Int32(gguf.get_int("tokenizer.ggml.unknown_token_id", 0))
+        self.mask_id = Int32(gguf.get_int("tokenizer.ggml.mask_token_id", -1))
+        if self.mask_id == -1:
+            var m_id = self.find_token("<mask>")
+            if m_id == -1:
+                m_id = self.find_token("[MASK]")
+            self.mask_id = m_id
+
+        # Ensure known special IDs have their piece strings in special_tokens
+        var known_ids = List[llama_token]()
+        known_ids.append(self.bos_id)
+        known_ids.append(self.eos_id)
+        known_ids.append(self.eot_id)
+        known_ids.append(self.pad_id)
+        known_ids.append(self.mask_id)
+        for k_i in range(len(known_ids)):
+            var kid = known_ids[k_i]
+            if kid >= 0 and Int(kid) < self.vocab_size:
+                var k_str = self.tokens[Int(kid)]
+                if k_str.byte_length() > 0:
+                    var already = False
+                    for s_i in range(len(self.special_tokens)):
+                        if self.special_tokens[s_i] == k_str:
+                            already = True
+                            break
+                    if not already:
+                        self.special_tokens.append(k_str)
+
+    def add_special_token(mut self, piece: String, token_type: Int32 = 4) -> llama_token:
+        """ Dynamically register a special/control token (e.g., `<opt_0>`, `<mask>`) into the vocabulary."""
+        var existing = self.find_token(piece)
+        if existing != -1:
+            if Int(existing) < len(self.token_types):
+                self.token_types[Int(existing)] = token_type
+            var already = False
+            for i in range(len(self.special_tokens)):
+                if self.special_tokens[i] == piece:
+                    already = True
+                    break
+            if not already and piece.byte_length() > 0:
+                self.special_tokens.append(piece)
+            return existing
+
+        var new_id = Int32(self.vocab_size)
+        self.tokens.append(piece)
+        self.scores.append(0.0)
+        while len(self.token_types) < self.vocab_size:
+            self.token_types.append(1)
+        self.token_types.append(token_type)
+        self.token_to_id[piece] = new_id
+        if piece.byte_length() > 0:
+            self.special_tokens.append(piece)
+        self.vocab_size += 1
+        return new_id
 
     def find_token(self, s: String) -> Int32:
         """ Find token ID for an exact piece string."""
@@ -319,19 +396,92 @@ def tokenize_bpe(
     return tokens^
 
 
+def _encode_raw_span(
+        vocab: llama_vocab_p,
+        span_text: String,
+        mut tokens: List[llama_token],
+    ):
+    """ Dispatch a single non-special text span to the active tokenization engine."""
+    if span_text.byte_length() == 0:
+        return
+    if vocab[].vocab_type == VOCAB_TYPE_SPM:
+        var spm_toks = tokenize_spm(vocab, span_text, False, False)
+        for i in range(len(spm_toks)):
+            tokens.append(spm_toks[i])
+    else:
+        var bpe_toks = tokenize_bpe(vocab, span_text, False, False)
+        for i in range(len(bpe_toks)):
+            tokens.append(bpe_toks[i])
+
+
 def tokenize_text(
         vocab: llama_vocab_p,
         text: String,
         add_special: Bool = True,
         parse_special: Bool = False,
     ) -> List[llama_token]:
-    """ Unified tokenization router dispatching to BPE or SentencePiece Unigram based on vocab_type."""
+    """ Unified tokenization router with special-token pre-splitting and BOS/EOS encoder framing."""
+    var tokens = List[llama_token]()
     if Int(vocab) == 0:
-        return List[llama_token]()
-    if vocab[].vocab_type == VOCAB_TYPE_SPM:
-        return tokenize_spm(vocab, text, add_special, parse_special)
-    else:
-        return tokenize_bpe(vocab, text, add_special, parse_special)
+        return tokens^
+
+    if add_special and vocab[].add_bos and vocab[].bos_id >= 0:
+        tokens.append(vocab[].bos_id)
+
+    var n_bytes = text.byte_length()
+    if n_bytes > 0:
+        if not parse_special or len(vocab[].special_tokens) == 0:
+            _encode_raw_span(vocab, text, tokens)
+        else:
+            var t_ptr = text.unsafe_ptr()
+            var span_start = 0
+            var pos = 0
+
+            while pos < n_bytes:
+                var best_match_idx = -1
+                var best_match_len = 0
+
+                for s_i in range(len(vocab[].special_tokens)):
+                    var sp_str = vocab[].special_tokens[s_i]
+                    var sp_len = sp_str.byte_length()
+                    if sp_len > best_match_len and pos + sp_len <= n_bytes:
+                        var sp_ptr = sp_str.unsafe_ptr()
+                        var match_ok = True
+                        for k in range(sp_len):
+                            if t_ptr[unsafe_offset=pos + k] != sp_ptr[unsafe_offset=k]:
+                                match_ok = False
+                                break
+                        if match_ok:
+                            best_match_idx = s_i
+                            best_match_len = sp_len
+
+                if best_match_idx != -1:
+                    if pos > span_start:
+                        var sub_len = pos - span_start
+                        var sub_ptr = t_ptr.unsafe_offset(span_start)
+                        var raw_span = String(unsafe_from_utf8=Span(unsafe_ptr=sub_ptr, length=sub_len))
+                        _encode_raw_span(vocab, raw_span, tokens)
+
+                    var sp_piece = vocab[].special_tokens[best_match_idx]
+                    var sp_id = vocab[].find_token(sp_piece)
+                    if sp_id != -1:
+                        tokens.append(sp_id)
+
+                    pos += best_match_len
+                    span_start = pos
+                else:
+                    pos += 1
+
+            if span_start < n_bytes:
+                var rem_len = n_bytes - span_start
+                var rem_ptr = t_ptr.unsafe_offset(span_start)
+                var rem_span = String(unsafe_from_utf8=Span(unsafe_ptr=rem_ptr, length=rem_len))
+                _encode_raw_span(vocab, rem_span, tokens)
+
+    if add_special and vocab[].add_eos and vocab[].eos_id >= 0:
+        tokens.append(vocab[].eos_id)
+
+    return tokens^
 
 
 def detokenize_text(
@@ -448,3 +598,19 @@ def llama_vocab_get_score(vocab: llama_vocab_p, token: llama_token) -> Float32:
     if Int(vocab) == 0 or token < 0 or Int(token) >= len(vocab[].scores):
         return Float32(0.0)
     return vocab[].scores[Int(token)]
+
+def llama_vocab_add_special_token(
+        vocab: llama_vocab_p,
+        piece: String,
+        token_type: Int32 = 4,
+    ) -> llama_token:
+    """ Register a dynamic special/control token on `vocab` and return its token ID."""
+    if Int(vocab) == 0:
+        return -1
+    return vocab[].add_special_token(piece, token_type)
+
+def llama_vocab_find_token(vocab: llama_vocab_p, piece: String) -> llama_token:
+    """ Look up the token ID for an exact piece string."""
+    if Int(vocab) == 0:
+        return -1
+    return vocab[].find_token(piece)
