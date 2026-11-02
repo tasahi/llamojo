@@ -25,6 +25,14 @@ from .types import (
     ModelConfig,
     null_ptr,
 )
+from .interop import (
+    TensorMemoryView,
+    matrix_to_memory_view,
+    memory_view_to_matrix,
+    NuMojoNDArrayView,
+    matrix_to_numojo_2d,
+    numojo_to_matrix_view,
+)
 from .gguf import (
     BytePtr,
     GGUFValue,

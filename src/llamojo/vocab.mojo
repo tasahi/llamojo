@@ -156,6 +156,7 @@ struct llama_vocab(Movable):
             or arch == "modernbert"
             or arch == "mmbert"
             or arch == "bert"
+            or arch == "laya"
         ):
             default_add_eos = True
         self.add_eos = gguf.get_bool("tokenizer.ggml.add_eos_token", default_add_eos)
