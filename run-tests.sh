@@ -40,8 +40,8 @@ fi
 
 if command -v python >/dev/null 2>&1; then
     echo ""
-    echo ">>> Running Python Zero-Copy Views & Hugging Face Compat Test Suites..."
-    PYTHONPATH=python python -m unittest tests.test_python_views tests.test_python_hf_compat -v
+    echo ">>> Running Python Zero-Copy Views, Hugging Face Compat & Safetensors Interop Test Suites..."
+    PYTHONPATH=python python -m unittest tests.test_python_views tests.test_python_hf_compat tests.test_safetensors_interop -v
 fi
 
 echo ""

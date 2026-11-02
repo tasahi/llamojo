@@ -18,6 +18,7 @@ Design notes
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Union
 
@@ -121,8 +122,13 @@ class LlamojoForCausalLM:
     def from_pretrained(
             cls, model_path: str, n_ctx: int = 2048, **kwargs: Any
         ) -> "LlamojoForCausalLM":
-        """ Load a local GGUF file. Hub ids use ``Llama.from_pretrained`` instead."""
+        """ Load a local GGUF file or Hugging Face Safetensors checkpoint directory."""
         from .llama import Llama
+
+        model_path = os.path.abspath(model_path)
+        # If model_path is a directory containing model.safetensors or config.json
+        if os.path.isdir(model_path):
+            return cls(Llama.from_safetensors(model_path, n_ctx=n_ctx, **kwargs))
 
         return cls(Llama(model_path=model_path, n_ctx=n_ctx, **kwargs))
 

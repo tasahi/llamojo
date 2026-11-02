@@ -15,12 +15,23 @@ from .llama import (
 )
 from .hf_compat import CausalLMOutput, LlamojoForCausalLM, LlamojoTokenizer
 from ._views import TensorView
+from .safetensors import SafetensorsFile, load_safetensors_dir, save_safetensors
+from .convert import convert_safetensors_to_gguf
+from .weight_maps import hf_to_gguf_name, gguf_to_hf_name, permute_rope_hf_to_ggml, permute_rope_ggml_to_hf
 
 __all__ = [
     "LlamojoForCausalLM",
     "LlamojoTokenizer",
     "CausalLMOutput",
     "TensorView",
+    "SafetensorsFile",
+    "load_safetensors_dir",
+    "save_safetensors",
+    "convert_safetensors_to_gguf",
+    "hf_to_gguf_name",
+    "gguf_to_hf_name",
+    "permute_rope_hf_to_ggml",
+    "permute_rope_ggml_to_hf",
     "Llama",
     "LlamaGrammar",
     "LlamaState",

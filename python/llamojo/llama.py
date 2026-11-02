@@ -214,6 +214,32 @@ class Llama:
 
         return cls(model_path=model_path, *args, **kwargs)
 
+    @classmethod
+    def from_safetensors(
+            cls,
+            dir_path: str,
+            output_gguf_path: Optional[str] = None,
+            arch: str = "llama",
+            *args: Any,
+            **kwargs: Any,
+        ) -> "Llama":
+        """ Load a model directly from a Hugging Face Safetensors checkpoint directory."""
+        from .convert import convert_safetensors_to_gguf
+
+        dir_path = os.path.abspath(dir_path)
+        if not output_gguf_path:
+            output_gguf_path = os.path.join(dir_path, "model.gguf")
+
+        # Convert to local GGUF if not already converted
+        if not os.path.isfile(output_gguf_path):
+            convert_safetensors_to_gguf(
+                model_dir=dir_path,
+                output_gguf_path=output_gguf_path,
+                arch=arch,
+            )
+
+        return cls(model_path=output_gguf_path, *args, **kwargs)
+
     def __init__( self,
             model_path: str,
             n_ctx: int = 512,

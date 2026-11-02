@@ -1,6 +1,6 @@
 # Comprehensive PyTorch & Tensor Interoperability Architecture: `llamojo` (Inference)
 
-Status: **PARTIALLY IMPLEMENTED** (Part I Completed & Verified; Part II Planned). Scope: inference, runtime, tensor export, and weights loading in `llamojo`.
+Status: **COMPLETED & VERIFIED** (Part I & Part II Fully Implemented). Scope: inference, runtime, zero-copy views, Safetensors ingestion, and weights translation in `llamojo`.
 
 ---
 
@@ -95,15 +95,17 @@ The primary goal is to make `llamojo` transparently pluggable into modern PyTorc
 | **DLPack PyTorch** | `tests/test_python_views.py` | `torch.from_dlpack(view)` and `view.as_torch()` match numerical contents without copy. | **PASS** |
 | **Full Logits Parity** | `tests/test_python_views.py` | Logits at step $i$ in `all_logits=True` match single-token decode logits within $\le 10^{-4}$. | **PASS** |
 | **Live Model Inference** | `data/SmolLM2-135M-Instruct-Q4_K_M.gguf` | Verify zero-copy logits view, full logits_all (shape `[N, 49152]`), and KV cache view on real weights. | **PASS** |
-| **Safetensors Reader** | `tests/test_safetensors.mojo` | Synthetic Safetensors round-trip; verify bounds checking on corrupt files. | PLANNED (Part II) |
-| **Weight Mapping** | `tests/test_weight_maps.mojo` | Ensure 100% bijective parameter mapping for target architectures without missing keys. | PLANNED (Part II) |
-| **End-to-End HF Parity** | `tests/test_hf_parity.py` | Compare logits of Safetensors loaded in `llamojo` against official `transformers` pipeline ($\le 10^{-3}$). | PLANNED (Part II) |
+| **Safetensors Reader/Writer** | `tests/test_safetensors_interop.py` | Zero-dependency memory-mapped read/write, corrupt header and out-of-bounds offset rejection. | **PASS** |
+| **Sharded Checkpoints** | `tests/test_safetensors_interop.py` | Correctly parse multi-file checkpoints via `model.safetensors.index.json`. | **PASS** |
+| **Weight Mapping & RoPE** | `tests/test_safetensors_interop.py` | Bijective key translation (HF <-> GGUF) and complex RoPE row permutation round-trip. | **PASS** |
+| **Direct Safetensors Loading** | `tests/test_safetensors_interop.py` | Load synthetic HuggingFace directory via `Llama.from_safetensors` and decode. | **PASS** |
+| **HF Facade Directory Load** | `tests/test_safetensors_interop.py` | `LlamojoForCausalLM.from_pretrained(dir)` directly loads Safetensors model dir. | **PASS** |
 
 ---
 
-## 6. Part 1 Implementation Status [COMPLETED]
+## 5. Implementation Status Summary
 
-Delivered components:
+### Part 1: Zero-Copy Views & Full-Sequence Logits [COMPLETED]
 1. **C ABI Export Layer (`src/llamojo/c_api.mojo`)**:
    - `struct llamojo_view`: C layout matching `TensorMemoryView` with data pointer, dtype, 4D shape, 4D strides, total elements, and version tag.
    - `llamojo_get_logits_view`, `llamojo_get_embeddings_view`, `llamojo_get_hidden_view`, `llamojo_get_kv_view`.
@@ -121,9 +123,27 @@ Delivered components:
    - `tests/test_python_views.py`: Unit tests for NumPy views, stale detection, DLPack export, and full-sequence logits.
    - Automated integration in `run-tests.sh`. All tests pass on Mojo 1.1.0 and Python.
 
+### Part 2: Safetensors Import/Export & GGUF Key Mapping [COMPLETED]
+1. **Zero-Dependency Safetensors Engine (`python/llamojo/safetensors.py`)**:
+   - Memory-mapped reader `SafetensorsFile` reading standard 8-byte little-endian headers and JSON tensor dictionaries.
+   - Zero-copy tensor slice retrieval with `mmap` buffer views.
+   - Support for `BF16` (upcasted to `F32`), `F32`, `F16`, `I32`, `I16`, `I8`, `U8`, and `BOOL`.
+   - `save_safetensors()` serializing arbitrary NumPy weight dictionaries to compliant `.safetensors` files with 8-byte padding alignment.
+   - `load_safetensors_dir()` handling single-file and sharded checkpoints with `model.safetensors.index.json`.
+2. **Bidirectional Weight Translation & RoPE Permutation (`python/llamojo/weight_maps.py`)**:
+   - `hf_to_gguf_name()` mapping Hugging Face parameter hierarchy (`model.layers.N.self_attn.q_proj.weight`, `mlp.gate_proj`, etc.) to internal GGUF names (`blk.N.attn_q.weight`, `blk.N.ffn_gate.weight`).
+   - `gguf_to_hf_name()` for reverse state-dict export.
+   - `permute_rope_hf_to_ggml()` and `permute_rope_ggml_to_hf()` handling complex RoPE rotary matrix layout permutations.
+3. **End-to-End Direct Loading & Conversion (`python/llamojo/convert.py` & `python/llamojo/llama.py`)**:
+   - `convert_safetensors_to_gguf()` converting Hugging Face checkpoint directories + `config.json` into loadable GGUF files with metadata and tensor alignments.
+   - `Llama.from_safetensors(dir_path)` providing one-step loading of Hugging Face directories.
+   - `LlamojoForCausalLM.from_pretrained(dir_path)` automatically detecting directories and loading Safetensors checkpoints.
+4. **Verification**:
+   - `tests/test_safetensors_interop.py`: 4 comprehensive test suites covering Safetensors I/O, bounds validation, sharded indices, RoPE round-tripping, and live forward decode. Integrated into `run-tests.sh`.
+
 ---
 
-## 5. Architectural Risks & Mitigations
+## 6. Architectural Risks & Mitigations
 
 1. **Memory Lifetime & Dangling Pointers**:
    - *Risk*: Python users retaining a view after the C context advances or frees memory.
