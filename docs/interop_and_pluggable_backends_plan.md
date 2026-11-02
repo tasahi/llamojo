@@ -106,3 +106,10 @@ Implemented in ggojo (`graph/memory_planner.mojo`, `interop/max_graph.mojo`; see
 
 ## Remaining Work
 Adapters for external backends, graph-planner integration and real MAX lowering are tracked in the ggojo plan. In llamojo, the exporters in `context_views.mojo` are the only integration point needed.
+
+## PyTorch-Style API Facade [IMPLEMENTED]
+`python/llamojo/hf_compat.py` provides `LlamojoForCausalLM` and `LlamojoTokenizer`, a `transformers`-style `generate()` / `model(ids).logits` / tokenizer API over `llamojo.Llama`. This is llamojo-only and pure Python. See [hf_compat_facade.md](hf_compat_facade.md). Tests: `tests/test_python_hf_compat.py` (7 passing, fake backend).
+
+## Follow-Up Plans (PyTorch Compatibility Options 2 to 4)
+- Comprehensive Python / PyTorch Interoperability Plan (Inference & Weights): [pytorch_interop_plan.md](pytorch_interop_plan.md) (covers zero-copy views, full-sequence logits, Safetensors import/export, and key mapping)
+- Training Counterpart (`ggojo`): `ggojo/docs/pytorch_interop_plan.md` (covers Safetensors checkpointing and `nn.Module`-style Python API)

@@ -36,6 +36,25 @@ def get_lib() -> ctypes.CDLL:
     if _lib is not None:
         return _lib
 
+    # Automatically resolve modular runtime lib dir if needed
+    modular_lib_dirs = [
+        pathlib.Path(p)
+        for p in [
+            "/home/tasahi/miniconda/envs/moj/lib/python3.14/site-packages/modular/lib",
+            os.path.expanduser("~/.modular/lib"),
+        ]
+        if os.path.isdir(p)
+    ]
+    for d in modular_lib_dirs:
+        curr = os.environ.get("LD_LIBRARY_PATH", "")
+        if str(d) not in curr:
+            os.environ["LD_LIBRARY_PATH"] = f"{d}:{curr}" if curr else str(d)
+        for sub in d.glob("libAsyncRT*.so"):
+            try:
+                ctypes.CDLL(str(sub))
+            except Exception:
+                pass
+
     lib_path = find_library()
     lib = ctypes.CDLL(str(lib_path))
 
@@ -233,6 +252,19 @@ def get_lib() -> ctypes.CDLL:
         ctypes.c_float,
     ]
     lib.llama_lora_adapter_apply.restype = ctypes.c_int32
+
+    # Part 1: Zero-Copy Views
+    lib.llamojo_get_logits_view.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.llamojo_get_logits_view.restype = ctypes.c_int32
+
+    lib.llamojo_get_embeddings_view.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.llamojo_get_embeddings_view.restype = ctypes.c_int32
+
+    lib.llamojo_get_hidden_view.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.llamojo_get_hidden_view.restype = ctypes.c_int32
+
+    lib.llamojo_get_kv_view.argtypes = [ctypes.c_void_p, ctypes.c_int32, ctypes.c_void_p]
+    lib.llamojo_get_kv_view.restype = ctypes.c_int32
 
     lib.llama_backend_init()
     _lib = lib

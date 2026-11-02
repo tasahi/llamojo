@@ -30,12 +30,18 @@ for test in "${TESTS[@]}"; do
     "$MOJO_BIN" $INCLUDE_FLAGS "$test"
 done
 
-if command -v gcc >/dev/null 2>&1 && [ -f "build/libllama.so" ]; then
+if command -v gcc >/dev/null 2>&1 && [ -f "build/libllamojo.so" ]; then
     echo ""
-    echo ">>> Running tests/test_c_abi.c against build/libllama.so..."
-    gcc tests/test_c_abi.c -Lbuild -lllama -Wl,-rpath,"$SCRIPT_DIR/build" -o tests/test_c_abi_bin
+    echo ">>> Running tests/test_c_abi.c against build/libllamojo.so..."
+    gcc tests/test_c_abi.c -Lbuild -lllamojo -Wl,-rpath,"$SCRIPT_DIR/build" -o tests/test_c_abi_bin
     ./tests/test_c_abi_bin
     rm -f tests/test_c_abi_bin
+fi
+
+if command -v python >/dev/null 2>&1; then
+    echo ""
+    echo ">>> Running Python Zero-Copy Views & Hugging Face Compat Test Suites..."
+    PYTHONPATH=python python -m unittest tests.test_python_views tests.test_python_hf_compat -v
 fi
 
 echo ""

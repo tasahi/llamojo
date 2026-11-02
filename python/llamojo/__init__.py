@@ -13,8 +13,14 @@ from .llama import (
     LogitsProcessorList,
     MinTokensLogitsProcessor,
 )
+from .hf_compat import CausalLMOutput, LlamojoForCausalLM, LlamojoTokenizer
+from ._views import TensorView
 
 __all__ = [
+    "LlamojoForCausalLM",
+    "LlamojoTokenizer",
+    "CausalLMOutput",
+    "TensorView",
     "Llama",
     "LlamaGrammar",
     "LlamaState",

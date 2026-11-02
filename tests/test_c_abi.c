@@ -41,6 +41,28 @@ bool llama_numa_is_available(void);
 int32_t llama_numa_node_count(void);
 bool llama_numa_pin_thread(int32_t core_id);
 
+// Part 1: Zero-Copy llamojo_view declarations
+typedef struct {
+    void* data;
+    uint32_t dtype;
+    int32_t ndim;
+    int64_t shape0;
+    int64_t shape1;
+    int64_t shape2;
+    int64_t shape3;
+    int64_t strides0;
+    int64_t strides1;
+    int64_t strides2;
+    int64_t strides3;
+    int64_t total_elements;
+    uint64_t version_tag;
+} llamojo_view;
+
+int32_t llamojo_get_logits_view(llama_context_p ctx, llamojo_view* out_view);
+int32_t llamojo_get_embeddings_view(llama_context_p ctx, llamojo_view* out_view);
+int32_t llamojo_get_hidden_view(llama_context_p ctx, llamojo_view* out_view);
+int32_t llamojo_get_kv_view(llama_context_p ctx, int32_t which_cache, llamojo_view* out_view);
+
 int main(void) {
     printf("=== Testing llamojo libllama.so C-ABI ===\n");
 
@@ -89,6 +111,18 @@ int main(void) {
     bool pin_ok = llama_numa_pin_thread(0);
     assert(pin_ok == true);
     printf("  NUMA C-ABI query & pin verified: avail=%d, nodes=%d\n", numa_avail, nodes);
+
+    // Test Part 1: Zero-copy view C-ABI safety with NULL context
+    llamojo_view test_v;
+    int32_t ret_v = llamojo_get_logits_view(NULL, &test_v);
+    assert(ret_v == -1);
+    ret_v = llamojo_get_embeddings_view(NULL, &test_v);
+    assert(ret_v == -1);
+    ret_v = llamojo_get_hidden_view(NULL, &test_v);
+    assert(ret_v == -1);
+    ret_v = llamojo_get_kv_view(NULL, 0, &test_v);
+    assert(ret_v == -1);
+    printf("  llamojo_view C-ABI null-safety verified\n");
 
     llama_backend_free();
     printf("=== C-ABI integration test passed! ✓ ===\n");

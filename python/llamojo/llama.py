@@ -279,6 +279,7 @@ class Llama:
         # Token and state tracking
         self.input_ids: List[int] = []
         self.scores: Optional[Any] = None
+        self._generation: int = 1
 
         # Chat format resolution
         self.chat_format = chat_format
@@ -403,6 +404,7 @@ class Llama:
 
     def close(self):
         """ Release all allocated native resources."""
+        self._generation += 1
         if hasattr(self, "_ctx") and self._ctx:
             self._lib.llama_free(self._ctx)
             self._ctx = None
@@ -425,6 +427,7 @@ class Llama:
 
     def reset(self):
         """ Reset KV cache and internal context state."""
+        self._generation += 1
         if hasattr(self, "_ctx") and self._ctx:
             self._lib.llama_kv_cache_clear(self._ctx)
         self.input_ids = []
@@ -533,23 +536,31 @@ class Llama:
                         for idx, val in enumerate(res):
                             scores[idx] = val
 
-    def eval(self, tokens: List[int]):
-        """ Evaluate a sequence of tokens in the model."""
+    def eval(self, tokens: List[int], all_logits: bool = False):
+        """ Evaluate a sequence of tokens in the model.
+
+        When all_logits=True, calculates logits for all token positions in the batch,
+        enabling per-token scoring and full-sequence logits extraction.
+        """
         if not tokens:
             return
+        self._generation += 1
+        n = len(tokens)
         start_pos = len(self.input_ids)
-        batch = self._lib.llama_batch_init(1, 0, 1)
+        batch = self._lib.llama_batch_init(n, 0, 1)
         try:
             for i, tok in enumerate(tokens):
+                compute_logit = all_logits or (i == n - 1)
                 self._lib.llama_batch_set_token(
-                    batch, 0, tok, start_pos + i, 0, (i == len(tokens) - 1)
+                    batch, i, tok, start_pos + i, 0, compute_logit
                 )
-                self._lib.llama_batch_set_n_tokens(batch, 1)
-                ret = self._lib.llama_decode(self._ctx, batch)
-                if ret != 0:
-                    raise RuntimeError(f"llama_decode failed at token {i}")
+            self._lib.llama_batch_set_n_tokens(batch, n)
+            ret = self._lib.llama_decode(self._ctx, batch)
+            if ret != 0:
+                raise RuntimeError("llama_decode failed during batched prefill")
             self.input_ids.extend(tokens)
-            logits_ptr = self._lib.llama_get_logits_ith(self._ctx, 0)
+            last_idx = n - 1 if all_logits else 0
+            logits_ptr = self._lib.llama_get_logits_ith(self._ctx, last_idx)
             if logits_ptr:
                 addr = ctypes.cast(logits_ptr, ctypes.c_void_p).value
                 if _NUMPY_AVAILABLE:
@@ -657,6 +668,96 @@ class Llama:
             results.append(vec)
 
         return results[0] if is_single else results
+
+    def get_logits_view(self) -> Any:
+        """ Returns zero-copy TensorView over active logits buffer [vocab_size]."""
+        from ._views import LlamojoViewCtypes, TensorView
+
+        c_v = LlamojoViewCtypes()
+        ret = self._lib.llamojo_get_logits_view(self._ctx, ctypes.byref(c_v))
+        if ret != 0:
+            raise RuntimeError("Failed to extract logits view from context")
+        shape = (int(c_v.shape0),)
+        strides = (int(c_v.strides0),)
+        return TensorView(
+            parent=self,
+            data_ptr=c_v.data,
+            shape=shape,
+            strides=strides,
+            dtype=int(c_v.dtype),
+            generation=self._generation,
+            dtype_name="float32",
+        )
+
+    def get_embeddings_view(self) -> Any:
+        """ Returns zero-copy TensorView over embeddings buffer [n_embd]."""
+        from ._views import LlamojoViewCtypes, TensorView
+
+        c_v = LlamojoViewCtypes()
+        ret = self._lib.llamojo_get_embeddings_view(self._ctx, ctypes.byref(c_v))
+        if ret != 0:
+            raise RuntimeError("Failed to extract embeddings view from context")
+        shape = (int(c_v.shape0),)
+        strides = (int(c_v.strides0),)
+        return TensorView(
+            parent=self,
+            data_ptr=c_v.data,
+            shape=shape,
+            strides=strides,
+            dtype=int(c_v.dtype),
+            generation=self._generation,
+            dtype_name="float32",
+        )
+
+    def get_kv_view(self, which_cache: int = 0) -> Any:
+        """ Returns zero-copy TensorView over K (which_cache=0) or V (which_cache=1) cache.
+
+        Shape: [n_layers, max_ctx, kv_dim]
+        """
+        from ._views import LlamojoViewCtypes, TensorView
+
+        c_v = LlamojoViewCtypes()
+        ret = self._lib.llamojo_get_kv_view(self._ctx, which_cache, ctypes.byref(c_v))
+        if ret != 0:
+            raise RuntimeError(f"Failed to extract KV view ({which_cache}) from context")
+        # Reverse shape from internal [cols, rows, planes] to standard [planes, rows, cols]
+        shape = (int(c_v.shape2), int(c_v.shape1), int(c_v.shape0))
+        strides = (int(c_v.strides2), int(c_v.strides1), int(c_v.strides0))
+        return TensorView(
+            parent=self,
+            data_ptr=c_v.data,
+            shape=shape,
+            strides=strides,
+            dtype=int(c_v.dtype),
+            generation=self._generation,
+            dtype_name="float32",
+        )
+
+    def logits_all(self, n_tokens: Optional[int] = None) -> Any:
+        """ Returns all calculated logits in the current batch as a numpy array or nested lists.
+
+        Shape: [n_tokens, n_vocab].
+        """
+        n = n_tokens or len(self.input_ids)
+        if n <= 0:
+            return [] if not _NUMPY_AVAILABLE else np.zeros((0, self._n_vocab), dtype=np.float32)
+
+        out_rows = []
+        for i in range(n):
+            ptr = self._lib.llama_get_logits_ith(self._ctx, i)
+            if not ptr:
+                row = [0.0] * self._n_vocab
+            else:
+                addr = ctypes.cast(ptr, ctypes.c_void_p).value
+                if _NUMPY_AVAILABLE:
+                    row = np.ctypeslib.as_array((ctypes.c_float * self._n_vocab).from_address(addr)).copy()
+                else:
+                    row = list((ctypes.c_float * self._n_vocab).from_address(addr))
+            out_rows.append(row)
+
+        if _NUMPY_AVAILABLE:
+            return np.stack(out_rows)
+        return out_rows
 
     def create_embedding( self,
             input: Union[str, List[str]],

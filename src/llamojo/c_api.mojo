@@ -517,3 +517,109 @@ def llama_lora_adapter_apply(
         return -1
     var path = _cstr_to_string(adapter_path_cstr)
     return _adapter_lora_apply(model, path, scale)
+
+# ─── Zero-Copy Tensor Memory Views (Part 1 Interop) ───────────────────────────
+
+from llamojo.interop import (
+    context_logits_view,
+    context_embeddings_view,
+    context_kv_k_view,
+    context_kv_v_view,
+    context_hidden_view,
+    TensorMemoryView,
+)
+
+struct llamojo_view(Copyable, Movable):
+    var data: BytePtr
+    var dtype: UInt32
+    var ndim: Int32
+    var shape0: Int64
+    var shape1: Int64
+    var shape2: Int64
+    var shape3: Int64
+    var strides0: Int64
+    var strides1: Int64
+    var strides2: Int64
+    var strides3: Int64
+    var total_elements: Int64
+    var version_tag: UInt64
+
+    def __init__(out self):
+        self.data = null_ptr[UInt8]()
+        self.dtype = 0
+        self.ndim = 0
+        self.shape0 = 0
+        self.shape1 = 0
+        self.shape2 = 0
+        self.shape3 = 0
+        self.strides0 = 0
+        self.strides1 = 0
+        self.strides2 = 0
+        self.strides3 = 0
+        self.total_elements = 0
+        self.version_tag = 0
+
+comptime llamojo_view_p = Pointer[llamojo_view, MutUntrackedOrigin]
+
+@always_inline
+def _fill_c_view(view: TensorMemoryView, out_view: llamojo_view_p, version: UInt64 = 1):
+    if Int(out_view) == 0:
+        return
+    out_view[].data = view.data
+    out_view[].dtype = view.dtype
+    out_view[].ndim = Int32(view.ndim)
+    out_view[].shape0 = view.shape[0]
+    out_view[].shape1 = view.shape[1]
+    out_view[].shape2 = view.shape[2]
+    out_view[].shape3 = view.shape[3]
+    out_view[].strides0 = view.strides[0]
+    out_view[].strides1 = view.strides[1]
+    out_view[].strides2 = view.strides[2]
+    out_view[].strides3 = view.strides[3]
+    out_view[].total_elements = view.total_elements
+    out_view[].version_tag = version
+
+@export
+def llamojo_get_logits_view(ctx: llama_context_p, out_view: llamojo_view_p) abi("c") -> Int32:
+    """ Fills out_view with the current logits buffer descriptor."""
+    if Int(ctx) == 0 or Int(out_view) == 0:
+        return -1
+    var v = context_logits_view(ctx[])
+    _fill_c_view(v, out_view, 1)
+    return 0
+
+@export
+def llamojo_get_embeddings_view(ctx: llama_context_p, out_view: llamojo_view_p) abi("c") -> Int32:
+    """ Fills out_view with the embeddings buffer descriptor."""
+    if Int(ctx) == 0 or Int(out_view) == 0:
+        return -1
+    if Int(ctx[].embeddings) == 0:
+        return -2
+    var v = context_embeddings_view(ctx[])
+    _fill_c_view(v, out_view, 1)
+    return 0
+
+@export
+def llamojo_get_hidden_view(ctx: llama_context_p, out_view: llamojo_view_p) abi("c") -> Int32:
+    """ Fills out_view with the hidden state buffer descriptor."""
+    if Int(ctx) == 0 or Int(out_view) == 0:
+        return -1
+    var v = context_hidden_view(ctx[])
+    _fill_c_view(v, out_view, 1)
+    return 0
+
+@export
+def llamojo_get_kv_view(ctx: llama_context_p, which_cache: Int32, out_view: llamojo_view_p) abi("c") -> Int32:
+    """ Fills out_view with the K (0) or V (1) cache view."""
+    if Int(ctx) == 0 or Int(out_view) == 0:
+        return -1
+    if which_cache == 0:
+        var v = context_kv_k_view(ctx[])
+        _fill_c_view(v, out_view, 1)
+        return 0
+    elif which_cache == 1:
+        var v = context_kv_v_view(ctx[])
+        _fill_c_view(v, out_view, 1)
+        return 0
+    return -2
+
