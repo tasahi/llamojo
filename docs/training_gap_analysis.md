@@ -1,3 +1,12 @@
+---
+type: architecture-decision
+title: "Architecture & Implementation Gap Analysis: LLM Training in llamojo"
+description: "Comprehensive assessment of backward pass requirements, tape management, optimizer states, and gradient dispatch on CPU."
+status: completed
+tags: [training-gaps, autodiff, backward-pass, adamw, gradient-accumulation]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Architecture & Implementation Gap Analysis: LLM Training in `llamojo`
 
 ## Executive Summary

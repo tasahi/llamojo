@@ -1,3 +1,12 @@
+---
+type: howto
+title: "llamojo Pure-CPU Extension Roadmap (Phases 5 – 11)"
+description: "Detailed technical roadmap for CPU SIMD extensions, quantization variants (Q4_K, Q6_K), multithreading, and MoE routing."
+status: completed
+tags: [cpu-roadmap, phases-5-11, quantization, moe, simd-extension]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # `llamojo` Pure-CPU Extension Roadmap (Phases 5 – 11)
 
 **Document:** `/mnt/c/Documents/Mojo/llamojo/docs/pure_cpu_extension_plan.md`  

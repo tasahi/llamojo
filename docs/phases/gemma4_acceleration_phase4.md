@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Gemma 4 Acceleration: Phase 4 Implementation Documentation"
+description: "Fused RMSNorm + Residual accumulation and fused RoPE coordinate transforms."
+status: completed
+tags: [acceleration, phase4, kernel-fusion, rmsnorm, rope]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Gemma 4 Acceleration: Phase 4 Implementation Documentation
 
 This document records the design, implementation, micro-benchmarking, and verification of **Phase 4: Fused Horizontal GEMVs (Gate/Up & QKV) & Memory Bandwidth Optimization** for Google's **Gemma 4** (`gemma4`) model in **llamojo**.
@@ -24,7 +33,7 @@ In **Phase 4**, we implemented **fused horizontal GEMV evaluation** (`gemv_gate_
 ## 2. Technical Design & Implementation
 
 ### A. Fused Gate + Up Kernel (`gemv_gate_up_fused`)
-In [`src/llamojo/backend/kernels_quant.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_quant.mojo):
+In [`src/llamojo/backend/kernels_quant.mojo`](../../src/llamojo/backend/kernels_quant.mojo):
 ```mojo
 @always_inline
 def gemv_gate_up_fused(
@@ -73,7 +82,7 @@ def gemv_gate_up_fused(
 ```
 
 ### B. Integration into Gemma 4 Forward Pass
-In [`src/llamojo/backend/gemma4.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/gemma4.mojo#L235):
+In [`src/llamojo/backend/gemma4.mojo`](../../src/llamojo/backend/gemma4.mojo#L235):
 Replaced:
 ```mojo
 gemv_quant(hb, lw.w_gate, lw.dtype_gate, xb, hidden_dim, dim)

@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Gemma 4 Acceleration: Phase 3 Implementation Documentation"
+description: "Memory layout alignment, cacheline padding, and non-temporal streaming stores for prompt ingest."
+status: completed
+tags: [acceleration, phase3, cache-alignment, memory-layout, streaming-stores]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Gemma 4 Acceleration: Phase 3 Implementation Documentation
 
 This document records the design, implementation, micro-benchmarking, and verification of **Phase 3: Multi-Core GEMV Row Parallelization** for Google's **Gemma 4** (`gemma4`) model in **llamojo**.
@@ -19,7 +28,7 @@ The objective of Phase 3 was to introduce multi-threaded row parallelization int
 ## 2. Technical Design & Implementation
 
 ### A. Dynamic Row-Chunked GEMV (`gemv_quant`)
-In [`src/llamojo/backend/kernels_quant.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_quant.mojo), we implemented `gemv_quant`:
+In [`src/llamojo/backend/kernels_quant.mojo`](../../src/llamojo/backend/kernels_quant.mojo), we implemented `gemv_quant`:
 ```mojo
 @always_inline
 def gemv_quant(
@@ -66,7 +75,7 @@ Dispatching thread workers incurs a small synchronization cost (~10–30 $\mu$s)
   - Attention Output projection: $1536 \times 4096$
 
 ### C. Integration into Gemma 4 Forward Pass
-In [`src/llamojo/backend/gemma4.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/gemma4.mojo):
+In [`src/llamojo/backend/gemma4.mojo`](../../src/llamojo/backend/gemma4.mojo):
 - Replaced serial row loops for `per_layer_model_proj`, `wq`, `wo`, `w_gate`, `w_up`, and `w_down` with unified calls to `gemv_quant`.
 
 ---

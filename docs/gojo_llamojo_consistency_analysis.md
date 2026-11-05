@@ -1,3 +1,12 @@
+---
+type: concept
+title: "Consistency Analysis: ggojo (GGML Reimplementation) vs. llamojo"
+description: "Structural consistency review of struct layouts, memory alignment, naming standards, and API paradigms across libraries."
+status: completed
+tags: [consistency-analysis, struct-layouts, api-design, alignment]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Consistency Analysis: `ggojo` (GGML Reimplementation) vs. `llamojo`
 
 ## Executive Summary

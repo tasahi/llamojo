@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Model Chat Template Engines in llamojo"
+description: "Specification and parsing implementation for Jinja2-style chat templates (ChatML, LLaMA-3, Mistral, Gemma) in Python and Mojo."
+status: completed
+tags: [chat-templates, jinja2, chatml, llama3-template, formatting]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Model Chat Template Engines in `llamojo`
 
 ## Overview

@@ -1,3 +1,12 @@
+---
+type: concept
+title: "Macro-Block Graph Walkers for Small Language Model Training in Mojo"
+description: "Design of coarse-grained computation graph execution for training SLMs with minimal memory overhead and fused kernels."
+status: completed
+tags: [macro-block-graphs, training, autodiff, graph-walker, checkpointing]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Macro-Block Graph Walkers for Small Language Model Training in Mojo
 
 ## 1. What is a "Macro-Block Graph Walker"?

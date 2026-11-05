@@ -41,6 +41,8 @@ from .threadpool import (
 from .kernels_norm_rope import (
     fused_rms_norm_residual,
     rms_norm,
+    layer_norm,
+    fused_layer_norm_residual,
     fused_silu_mul,
     silu,
     gelu,
@@ -51,6 +53,11 @@ from .kernels_norm_rope import (
     rope_head,
     apply_rope_norm,
     apply_rope_neox,
+)
+from .kernels_conv import (
+    conv1d_f32,
+    conv1d_k3_gelu,
+    transpose_add_pos_embd,
 )
 from .kernels_quant import (
     BytePtr,
@@ -71,6 +78,10 @@ from .kernels_quant import (
     dot_quant_row,
     dequantize_row,
     matmul_quant_fused,
+    matmul_quant_fused_biased,
+    gemv_quant,
+    gemv_quant_biased,
+    gemv_gelu_biased,
 )
 from .kernels_attn import (
     dot_vectors,

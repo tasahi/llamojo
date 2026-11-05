@@ -1,3 +1,12 @@
+---
+type: reference
+title: "llamojo Acceleration Phase 6: 2-Row GEMV Register Tiling"
+description: "2-row and 4-row register blocking for quantized GEMV kernels to minimize memory reload overhead."
+status: completed
+tags: [acceleration, phase6, register-tiling, gemv, memory-bandwidth]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # llamojo Acceleration Phase 6: 2-Row GEMV Register Tiling
 
 ## Executive Summary

@@ -1,3 +1,12 @@
+---
+type: reference
+title: "llamojo Python Integration & C-ABI Shared Library (libllamojo.so)"
+description: "Compilation and export of pure-Mojo C-ABI symbols, context lifecycles, and libllamojo.so packaging."
+status: completed
+tags: [python-integration, phase1, c-abi, libllamojo, shared-library]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # llamojo Python Integration & C-ABI Shared Library (`libllamojo.so`)
 
 ## Executive Summary
@@ -21,7 +30,7 @@ flowchart TD
     end
 ```
 
-The export bridge [`src/llamojo/c_api.mojo`](../src/llamojo/c_api.mojo) serves as the C-ABI gateway between Python and `llamojo`'s internal data structures.
+The export bridge [`src/llamojo/c_api.mojo`](../../src/llamojo/c_api.mojo) serves as the C-ABI gateway between Python and `llamojo`'s internal data structures.
 
 ---
 
@@ -78,7 +87,7 @@ The following C symbols are exported from `build/libllamojo.so`:
 
 ## 3. Compilation & Build Script
 
-A dedicated compilation script is provided at [`tools/build_shared_lib.sh`](../tools/build_shared_lib.sh):
+A dedicated compilation script is provided at [`tools/build_shared_lib.sh`](../../tools/build_shared_lib.sh):
 
 ```bash
 ./tools/build_shared_lib.sh

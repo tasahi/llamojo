@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Comprehensive PyTorch & Tensor Interoperability Architecture: llamojo (Inference)"
+description: "Architectural specification for PyTorch tensor exchange, HuggingFace pipeline integration, and DLPack zero-copy pointers."
+status: completed
+tags: [pytorch-interop, inference, dlpack, zero-copy, torch-tensor]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Comprehensive PyTorch & Tensor Interoperability Architecture: `llamojo` (Inference)
 
 Status: **COMPLETED & VERIFIED** (Part I & Part II Fully Implemented). Scope: inference, runtime, zero-copy views, Safetensors ingestion, and weights translation in `llamojo`.

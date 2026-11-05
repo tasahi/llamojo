@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Hugging Face Hub Integration: Llama.from_pretrained"
+description: "Design and ctypes implementation for downloading, caching, and instantiating GGUF models directly from Hugging Face Hub."
+status: completed
+tags: [huggingface-hub, from-pretrained, caching, gguf-download, python-api]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Hugging Face Hub Integration: `Llama.from_pretrained`
 
 ## Overview

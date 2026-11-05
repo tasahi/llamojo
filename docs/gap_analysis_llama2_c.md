@@ -1,3 +1,12 @@
+---
+type: architecture-decision
+title: "Architectural & Functional Gap Analysis: llamojo vs. llama2.c / llama2.mojo"
+description: "Feature-by-feature comparison analyzing memory efficiency, quantization support, GGUF compliance, and kernel optimizations."
+status: completed
+tags: [gap-analysis, llama2-c, quantization, performance, architecture]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Architectural & Functional Gap Analysis: `llamojo` vs. `llama2.c` / `llama2.mojo`
 
 ## Executive Summary

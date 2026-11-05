@@ -1,3 +1,12 @@
+---
+type: concept
+title: "Dual-Library Architecture: llamojo (Inference) & gradojo (Training)"
+description: "Architectural separation and synergistic relationship between llamojo inference engine and gradojo/ggojo training ecosystem."
+status: completed
+tags: [architecture, dual-library, inference, training, design-patterns]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Dual-Library Architecture: `llamojo` (Inference) & `gradojo` (Training)
 
 ## 1. Architectural Philosophy: Why Decouple?

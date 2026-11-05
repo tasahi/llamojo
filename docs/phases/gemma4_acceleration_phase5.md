@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Gemma 4 Acceleration: Phase 5 - Activation Quantization to Q8"
+description: "Dynamic runtime activation quantization to Q8_0 enabling integer-integer dot products."
+status: completed
+tags: [acceleration, phase5, activation-quantization, q8_0, int8-simd]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Gemma 4 Acceleration: Phase 5 - Activation Quantization to Q8
 
 This document records the design, implementation, precision validation, and benchmark results of **Phase 5: Activation Quantization to Q8 (`Q8_K`) with Integer-Domain Dot Products** for Google's **Gemma 4** (`gemma4`) model in **llamojo**.
@@ -33,7 +42,7 @@ Both engines now lock onto the exact canonical greedy character **"Squeaky the s
 ## 2. Technical Design & Implementation
 
 ### A. Q8_K Activation Block Quantization (`quantize_row_q8_k`)
-In [`src/llamojo/backend/kernels_quant.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_quant.mojo):
+In [`src/llamojo/backend/kernels_quant.mojo`](../../src/llamojo/backend/kernels_quant.mojo):
 - Quantizes the input activation vector $x \in \mathbb{R}^{D}$ into 256-element superblocks (292 bytes per superblock).
 - Computes per-superblock scale factor $d = \frac{1}{\text{iscale}}$ and 16-element block sums (`bsums`) of quantized `int8` values.
 

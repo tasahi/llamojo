@@ -1,3 +1,12 @@
+---
+type: reference
+title: "llamojo Acceleration Phase 7: Hardware-Specific Vector Instructions (AVX2 pmadd.ub.sw & pmadd.wd)"
+description: "Hardware-intrinsic vectorization leveraging AVX2 byte-multiply-and-add instructions for peak throughput."
+status: completed
+tags: [acceleration, phase7, avx2-intrinsics, pmaddubsw, micro-kernels]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # llamojo Acceleration Phase 7: Hardware-Specific Vector Instructions (AVX2 pmadd.ub.sw & pmadd.wd)
 
 ## Executive Summary

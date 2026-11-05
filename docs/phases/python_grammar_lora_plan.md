@@ -1,3 +1,12 @@
+---
+type: howto
+title: "Architecture & Implementation Plan: GBNF Grammar Sampling and LoRA Adapters via C-ABI in Python"
+description: "Engineering plan for exposing GBNF grammar-constrained sampling and multi-LoRA dynamic weighting to Python."
+status: completed
+tags: [gbnf-grammar, lora, python-plan, c-abi, constrained-sampling]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Architecture & Implementation Plan: GBNF Grammar Sampling and LoRA Adapters via C-ABI in Python
 
 ## Executive Summary

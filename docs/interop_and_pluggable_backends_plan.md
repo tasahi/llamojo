@@ -1,3 +1,12 @@
+---
+type: concept
+title: "Pluggable Compute & Library Interoperability Architecture: llamojo & ggojo"
+description: "Specification for pluggable compute engines, tensor zero-copy exchanges, and delegation to MAX Graph and NuMojo."
+status: active
+tags: [interoperability, pluggable-backends, max-graph, numojo, compute-engine]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Pluggable Compute & Library Interoperability Architecture: `llamojo` & `ggojo`
 
 ## 1. Overview & Strategic Goals

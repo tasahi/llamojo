@@ -1,3 +1,12 @@
+---
+type: reference
+title: "llamojo Python Integration Phase 3: Extended API Parity & Packaging"
+description: "OpenAI-compatible server schemas, streaming token iterators, wheels, and pip packaging for llamojo."
+status: completed
+tags: [python-integration, phase3, openai-api, streaming, packaging]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # llamojo Python Integration Phase 3: Extended API Parity & Packaging
 
 ## Executive Summary
@@ -8,7 +17,7 @@ In Phase 3 of the Python integration plan, we completed the **full API surface p
 ## 1. Implemented Features & Surface Expansion
 
 ### A. Extended `llama_cpp.Llama` Methods
-We added the following core methods to [`python/llamojo/llama.py`](../python/llamojo/llama.py):
+We added the following core methods to [`python/llamojo/llama.py`](../../python/llamojo/llama.py):
 1. **`reset()`**: Resets the KV cache and context state via `llama_kv_cache_clear`.
 2. **`token_bos()`, `token_eos()`, `token_nl()`**: Returns special token IDs directly from model vocabulary.
 3. **`eval(tokens)`**: Explicit token sequence evaluation for manual inference pipelines.
@@ -18,7 +27,7 @@ We added the following core methods to [`python/llamojo/llama.py`](../python/lla
 7. **`create_embedding(input, model=None)`**: OpenAI-compatible embedding endpoint dictionary.
 
 ### B. Standard Python Packaging
-- Added [`pyproject.toml`](../pyproject.toml) and [`setup.py`](../setup.py) configured with `setuptools.build_meta`.
+- Added [`pyproject.toml`](../../pyproject.toml) and [`setup.py`](../../setup.py) configured with `setuptools.build_meta`.
 - Supports installation directly via `pip install .` or `pip install -e .`.
 - Automatically includes and finds `build/libllamojo.so` from any working directory.
 
@@ -67,4 +76,3 @@ The remaining minor differences between `llamojo` and full upstream `llama-cpp-p
 | **LoRA Adapters** | Dynamically loads `.gguf` LoRA adapters | `llamojo` supports LoRA in Mojo (`lora.mojo`), but not yet bound in the Python `Llama` constructor. | Add `llama_lora_adapter_init` to `c_api.mojo`. |
 | **Batched Speculative Decoding** | Multi-sequence tree decoding | Decodes 1 token at a time in Python generation loop. | Speculative drafting hook can be added if needed. |
 | **GPU Offloading** | CUDA / Metal / Vulkan | Pure CPU (AVX2 / AVX-VNNI / SIMD). | Target designed for pure CPU execution. |
-

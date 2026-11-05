@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Gemma 4 Acceleration: Phase 1 Implementation Documentation"
+description: "SIMD width expansion and unrolled inner-loop quantized dot products across Q4_0 and Q8_0."
+status: completed
+tags: [acceleration, phase1, simd-unrolling, q4_0, q8_0]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Gemma 4 Acceleration: Phase 1 Implementation Documentation
 
 This document records the execution, empirical findings, and verification of **Phase 1: Compiler & Build Optimization** of the `llamojo` acceleration roadmap for Google's **Gemma 4** (`gemma4`).
@@ -15,7 +24,7 @@ This document records the execution, empirical findings, and verification of **P
 
 ## 2. Changes Implemented
 
-### A. CLI Performance Instrumentation ([`tools/llama_cli.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_cli.mojo))
+### A. CLI Performance Instrumentation ([`tools/llama_cli.mojo`](../../tools/llama_cli.mojo))
 - Added `from std.time import perf_counter_ns`.
 - Instrumented model loading time:
   ```mojo
@@ -74,7 +83,7 @@ mojo build -O3 --target-cpu alderlake -I src -I vendor/llama2.mojo tools/llama_c
 The Phase 1 benchmark demonstrated that compiler-level optimization flags (`-O3 --target-cpu alderlake`) produce virtually identical throughput to the default build.
 
 **Why compiler auto-vectorization cannot solve the bottleneck on its own:**
-In `dot_q6_k_row` and `dot_q4_k_row` ([`src/llamojo/backend/kernels_quant.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_quant.mojo)):
+In `dot_q6_k_row` and `dot_q4_k_row` ([`src/llamojo/backend/kernels_quant.mojo`](../../src/llamojo/backend/kernels_quant.mojo)):
 ```mojo
 for l in range(32):
     var is_idx = l // 16

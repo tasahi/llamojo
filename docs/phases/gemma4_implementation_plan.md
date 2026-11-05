@@ -1,3 +1,12 @@
+---
+type: howto
+title: "Pure-Mojo Gemma 4 Architecture Implementation Plan"
+description: "Master engineering plan for integrating Gemma 4 architectural innovations: PLE, per-head attention normalization, GeGLU, and hybrid SWA/global attention."
+status: completed
+tags: [gemma4, architecture-plan, ple, geglu, swa]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Pure-Mojo Gemma 4 Architecture Implementation Plan
 
 This document details the engineering blueprint to implement full, native, pure-Mojo inference support for the **Gemma 4** model family (specifically validating against `gemma-4-E2B-it.Q4_K_M.gguf`) in **llamojo**.

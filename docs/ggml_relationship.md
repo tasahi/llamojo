@@ -1,3 +1,12 @@
+---
+type: concept
+title: "Deep Dive: Does llamojo Use or Emulate the GGML Library?"
+description: "Technical breakdown of llamojo direct GGUF parsing and pure-Mojo execution vs. wrapping or linking external C/C++ GGML binaries."
+status: completed
+tags: [ggml, pure-mojo, gguf-format, emulation, c-interop]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Deep Dive: Does `llamojo` Use or Emulate the GGML Library?
 
 ## Executive Summary

@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Gemma 4 Architecture Support: Phase 5 & Final Parity Documentation"
+description: "End-to-end integration, full pipeline verification, and logit parity testing for Gemma 4 models."
+status: completed
+tags: [gemma4, phase5, e2e-parity, model-runner, verification]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Gemma 4 Architecture Support: Phase 5 & Final Parity Documentation
 
 This document records the design, implementation, debugging, and verification of **Phase 5: Full Integration, Sampler Tuning, Dynamic Memory Allocation, and Numerical Parity Verification** for Google's **Gemma 4** (`gemma4`) model in **llamojo**.
@@ -30,7 +39,7 @@ Rigorous layer-by-layer debugging revealed three critical root causes:
   - Layers 15 through 34 have wide feed-forward networks: `ffn_dim = 12288`.
   - In `llama.mojo`, the scratch buffers `q`, `xb2`, `hb`, `hb2` were originally allocated strictly based on `dim` (1536) and `hidden_dim` (6144).
 * **Impact**: When decoding layers $\ge 14$, GEMV kernels wrote 4096 and 12288 floats into 1536- and 6144-element buffers. This caused silent heap corruption, overwriting the KV cache, PLE buffers, and downstream residual states.
-* **Resolution**: In [`src/llamojo/llama.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/llama.mojo), activation buffers are now dynamically computed from model metadata:
+* **Resolution**: In [`src/llamojo/llama.mojo`](../../src/llamojo/llama.mojo), activation buffers are now dynamically computed from model metadata:
   ```mojo
   var max_q_dim = cfg.dim
   if cfg.arch_type == ARCH_GEMMA4:
@@ -54,7 +63,7 @@ Rigorous layer-by-layer debugging revealed three critical root causes:
   ```
   In `llamojo`, attention kernels (`gqa_decode`) originally computed offsets assuming contiguous storage of width `head_dim` ($256$ on SWA layers).
 * **Impact**: Key/Value embeddings written at offset $0..255$ into each 512-float cache slot were read using stride 256, indexing garbage memory for subsequent tokens.
-* **Resolution**: Extended [`src/llamojo/backend/kernels_attn.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_attn.mojo) with a `stride_kv` parameter:
+* **Resolution**: Extended [`src/llamojo/backend/kernels_attn.mojo`](../../src/llamojo/backend/kernels_attn.mojo) with a `stride_kv` parameter:
   ```mojo
   def gqa_decode[...](..., stride_kv: Int = 0):
       var skv = head_dim if stride_kv == 0 else stride_kv
@@ -66,7 +75,7 @@ Rigorous layer-by-layer debugging revealed three critical root causes:
 ### C. Temperature Handling & Sampling Configuration
 * **Problem**: `llama_cli.mojo` previously used default stochastic sampling without handling greedy sampling when `--temp 0.0` was requested.
 * **Impact**: Slight logit differences triggered non-deterministic or high-temperature fallback token selections.
-* **Resolution**: Added `--temp` / `-t` CLI option in [`tools/llama_cli.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tools/llama_cli.mojo). When `temp <= 0.0`, the sampler performs direct greedy argmax over logits.
+* **Resolution**: Added `--temp` / `-t` CLI option in [`tools/llama_cli.mojo`](../../tools/llama_cli.mojo). When `temp <= 0.0`, the sampler performs direct greedy argmax over logits.
 
 ---
 

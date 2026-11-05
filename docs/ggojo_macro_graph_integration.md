@@ -1,3 +1,12 @@
+---
+type: howto
+title: "Gap 1 & Gap 5 Integration: ggojo Macro-Block Execution in llamojo"
+description: "Integration guide for wrapping ggojo coarse-grained computation graphs and zero-copy memory buffers into llamojo pipelines."
+status: completed
+tags: [macro-graph, ggojo, pipeline-integration, zero-copy, kernels]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Gap 1 & Gap 5 Integration: ggojo Macro-Block Execution in llamojo
 
 ## 1. Architectural Overview

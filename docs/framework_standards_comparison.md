@@ -1,3 +1,12 @@
+---
+type: concept
+title: "Framework Standards Comparison for Mojo Training Ecosystem"
+description: "Comparative analysis of PyTorch, JAX, GGML, and Mojo design paradigms for gradient propagation and model declaration."
+status: completed
+tags: [framework-comparison, pytorch, jax, ggml, mojo-training]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Framework Standards Comparison for Mojo Training Ecosystem
 
 ## 1. Candidate Standards Comparison Matrix

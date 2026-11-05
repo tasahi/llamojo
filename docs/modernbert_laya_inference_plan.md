@@ -1,3 +1,12 @@
+---
+type: howto
+title: "Implementation Plan: ModernBERT & Laya Inference Engine in llamojo"
+description: "Engineering plan for bidirectional encoder inference, alternating sliding window attention, and option decision scoring."
+status: completed
+tags: [modernbert, laya, inference-engine, encoder, decision-head]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Implementation Plan: ModernBERT & Laya Inference Engine in llamojo
 
 ## 1. Executive Summary

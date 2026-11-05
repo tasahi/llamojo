@@ -1,3 +1,12 @@
+---
+type: reference
+title: "llamojo Python Integration: GBNF Grammar & LoRA Python Exposition (Steps 3, 4 & 5)"
+description: "Python client bindings for Grammar class, LoRA runtime adapter swapping, and pytest integration test suites."
+status: completed
+tags: [gbnf-grammar, lora, step3-4-5, python-bindings, tests]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # llamojo Python Integration: GBNF Grammar & LoRA Python Exposition (Steps 3, 4 & 5)
 
 ## Executive Summary
@@ -12,7 +21,7 @@ With these steps complete, `llamojo` now exposes **100% feature parity** with `l
 
 ## 1. Step 3: Low-Level ctypes Registration (`_lib.py`)
 
-In [`python/llamojo/_lib.py`](../python/llamojo/_lib.py), we registered the C-ABI signatures exported from `build/libllamojo.so`:
+In [`python/llamojo/_lib.py`](../../python/llamojo/_lib.py), we registered the C-ABI signatures exported from `build/libllamojo.so`:
 
 ```python
 # GBNF Grammar
@@ -48,7 +57,7 @@ lib.llama_lora_adapter_apply.restype = ctypes.c_int32
 ## 2. Step 4: High-Level Python Wrapper Implementation (`llama.py`)
 
 ### A. `LlamaGrammar` Class
-Implemented in [`python/llamojo/llama.py`](../python/llamojo/llama.py) matching `llama_cpp.LlamaGrammar`:
+Implemented in [`python/llamojo/llama.py`](../../python/llamojo/llama.py) matching `llama_cpp.LlamaGrammar`:
 ```python
 from llamojo import Llama, LlamaGrammar
 

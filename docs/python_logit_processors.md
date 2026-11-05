@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Logit Processors & Custom Biases in llamojo"
+description: "C-ABI hook infrastructure and Python callback wrappers for custom logit processors, penalties, and steering vectors."
+status: completed
+tags: [logit-processors, custom-bias, sampling-penalties, c-abi-hooks]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Logit Processors & Custom Biases in `llamojo`
 
 ## Overview

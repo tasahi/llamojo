@@ -1,3 +1,12 @@
+---
+type: reference
+title: "llamojo Python Integration Phase 2: High-Level llama_cpp-Compatible Python Wrapper"
+description: "Development of ctypes-driven Python wrapper matching llama-cpp-python Llama class interface."
+status: completed
+tags: [python-integration, phase2, ctypes, llama-cpp-python, api-wrapper]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # llamojo Python Integration Phase 2: High-Level `llama_cpp`-Compatible Python Wrapper
 
 ## Executive Summary
@@ -104,7 +113,7 @@ print(chat["choices"][0]["message"]["content"])
 
 ## 3. Test Suite & Verification
 
-A dedicated unit test suite was added to [`tests/test_python_bindings.py`](../tests/test_python_bindings.py) covering:
+A dedicated unit test suite was added to [`tests/test_python_bindings.py`](../../tests/test_python_bindings.py) covering:
 1. `test_tokenization`: Validates forward and reverse token piece decoding.
 2. `test_completion_schema`: Validates return dictionary matching OpenAI/llama_cpp specs.
 3. `test_callable_and_stop`: Validates callable `__call__` syntax and early termination on `stop` substrings.
@@ -123,4 +132,3 @@ Ran 5 tests in 11.739s
 OK
 ```
 All unit tests passed with 100% success.
-

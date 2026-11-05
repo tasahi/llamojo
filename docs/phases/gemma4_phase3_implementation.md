@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Gemma 4 Architecture Support: Phase 3 Implementation Documentation"
+description: "Hybrid sliding window attention (SWA) and global attention alternating schedule in pure Mojo."
+status: completed
+tags: [gemma4, phase3, swa, sliding-window, attention-schedule]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Gemma 4 Architecture Support: Phase 3 Implementation Documentation
 
 This document records the design, implementation, and verification of **Phase 3: Hybrid & Shared KV Cache Engine** for the Gemma 4 architecture (`gemma4`) in **llamojo**.

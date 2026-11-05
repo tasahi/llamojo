@@ -1,3 +1,12 @@
+---
+type: howto
+title: "llamojo Acceleration Plan: Zero-Regression Path to llama.cpp Parity"
+description: "Systematic 7-phase SIMD acceleration roadmap targeting CPU inference throughput parity with upstream llama.cpp."
+status: completed
+tags: [acceleration-plan, simd, gemv, optimization, cpu-inference]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # llamojo Acceleration Plan: Zero-Regression Path to llama.cpp Parity
 
 ## Executive Objective

@@ -1,3 +1,12 @@
+---
+type: concept
+title: "Architectural Deep-Dive: The GPT-2 / LLaMA-3 Byte-Level BPE Tokenizer"
+description: "Mathematical principles, UTF-8 regex tokenization rules, merge rank caching, and high-throughput BPE decoding in Mojo."
+status: completed
+tags: [tokenizer, bpe, gpt2, llama3, byte-pair-encoding]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Architectural Deep-Dive: The GPT-2 / LLaMA-3 Byte-Level BPE Tokenizer
 
 > **Scope**: Implementation details, mathematical byte remapping, tokenization lifecycle, and engineering importance of the GPT-2 Byte-Level Byte-Pair Encoding (BPE) tokenizer in pure Mojo (`llamojo`).

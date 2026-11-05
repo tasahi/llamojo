@@ -1,3 +1,12 @@
+---
+type: architecture-decision
+title: "Comprehensive Functional Gap Analysis: llamojo vs. llama-cpp-python"
+description: "Exhaustive parity audit comparing llamojo Python bindings with llama-cpp-python across all methods, parameters, and flags."
+status: completed
+tags: [gap-analysis, llama-cpp-python, parity-audit, api-comparison]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Comprehensive Functional Gap Analysis: `llamojo` vs. `llama-cpp-python`
 
 ## Executive Summary

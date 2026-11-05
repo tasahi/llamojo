@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Hugging Face / PyTorch-Style Facade for llamojo (hf_compat)"
+description: "High-level Python facade providing AutoModelForCausalLM and AutoTokenizer compatibility powered by native Mojo."
+status: completed
+tags: [huggingface, hf-compat, automodel, autotokenizer, python-facade]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Hugging Face / PyTorch-Style Facade for llamojo (`hf_compat`)
 
 ## 1. Purpose

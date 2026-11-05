@@ -1,3 +1,12 @@
+---
+type: reference
+title: "llamojo Implementation & Architecture Documentation"
+description: "Comprehensive architectural reference guide detailing memory management, GGUF parser, tokenizer, transformer forward, and sampling."
+status: completed
+tags: [implementation-guide, architecture, transformer, kv-cache, sampling]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # `llamojo` Implementation & Architecture Documentation
 
 **Target Repository:** `/mnt/c/Documents/Mojo/llamojo`  

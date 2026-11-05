@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Gemma 4 Acceleration: Phase 2 Implementation Documentation"
+description: "Multi-threaded GEMV row partitioning with dynamic work-stealing and cache affinity."
+status: completed
+tags: [acceleration, phase2, multithreading, thread-pool, gemv-parallel]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Gemma 4 Acceleration: Phase 2 Implementation Documentation
 
 This document records the design, implementation, differential verification, and benchmark results of **Phase 2: Explicit SIMD Vectorization of Dominant K-Quants (`Q6_K` and `Q4_K`)** for Google's **Gemma 4** (`gemma4`) model in **llamojo**.
@@ -17,7 +26,7 @@ In **Phase 2**, we implemented hand-vectorized SIMD routines using Mojo's native
 
 ## 2. Kernel Design & SIMD Vectorization
 
-### A. Vectorizing `dot_q4_k_row` ([`src/llamojo/backend/kernels_quant.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_quant.mojo))
+### A. Vectorizing `dot_q4_k_row` ([`src/llamojo/backend/kernels_quant.mojo`](../../src/llamojo/backend/kernels_quant.mojo))
 
 In standard `Q4_K`, each 256-element superblock contains 128 bytes of packed 4-bit nibbles.
 In Phase 2, we load 8 packed bytes at a time into `SIMD[DType.uint8, 8]`:
@@ -37,7 +46,7 @@ for g in range(4):
 - The scale and min vectors (`d1_v, mm1_v, d2_v, mm2_v`) broadcast scalar parameters across registers.
 - Floating-point multiply-accumulate operations fuse cleanly into AVX2 FMA pipelines.
 
-### B. Vectorizing `dot_q6_k_row` ([`src/llamojo/backend/kernels_quant.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_quant.mojo))
+### B. Vectorizing `dot_q6_k_row` ([`src/llamojo/backend/kernels_quant.mojo`](../../src/llamojo/backend/kernels_quant.mojo))
 
 In `Q6_K`, each 256-element superblock contains:
 - 128 bytes of low 4 bits (`ql`)
@@ -90,7 +99,7 @@ for g in range(4):
 ## 3. Verification & Differential Testing
 
 ### A. Dedicated Differential Test (`tests/test_quant_simd.mojo`)
-A new differential test suite was created in [`tests/test_quant_simd.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_quant_simd.mojo) to verify:
+A new differential test suite was created in [`tests/test_quant_simd.mojo`](../../tests/test_quant_simd.mojo) to verify:
 1. `dot_q6_k_row`: absolute difference vs scalar reference $< 7.7 \times 10^{-6}$.
 2. `dot_q4_k_row`: absolute difference vs scalar reference $< 1.5 \times 10^{-6}$.
 - Result: **All tests passed! ✓**

@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Gemma 4 Architecture Support: Phase 1 Implementation Documentation"
+description: "Verification and integration of Gemma 4 GGUF tensor layout mapping and config schema extensions in llamojo."
+status: completed
+tags: [gemma4, phase1, gguf-parsing, config-schema]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Gemma 4 Architecture Support: Phase 1 Implementation Documentation
 
 This document records the design, implementation, and verification of **Phase 1: GGUF Metadata Parser & Model Config Upgrades** for the Gemma 4 architecture (`gemma4`) in **llamojo**.

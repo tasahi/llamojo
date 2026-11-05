@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Python KV Cache & Context State Serialization (save_state & load_state)"
+description: "Architecture for serializing, saving, and restoring execution context, sequence tokens, and KV cache buffers to disk."
+status: completed
+tags: [kv-cache, state-serialization, save-state, load-state, context-preservation]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Python KV Cache & Context State Serialization (`save_state` & `load_state`)
 
 ## 1. Overview

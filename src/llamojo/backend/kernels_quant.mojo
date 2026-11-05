@@ -1007,6 +1007,105 @@ def matmul_quant_fused[ n: Int, ](
             var res = dot_quant_row(dtype, row_w_ptr, x, nc)
             C[k][unsafe_offset=r] = res
 
+
+@always_inline
+def matmul_quant_fused_biased[ n: Int, ](
+        dtype: UInt32,
+        C: StaticTuple[FloatPtr, n],
+        x: FloatPtr,
+        W: StaticTuple[BytePtr, n],
+        B: StaticTuple[FloatPtr, n],
+        row_start: Int,
+        row_end: Int,
+        nc: Int,
+    ):
+    """ Fused multi-matrix projection with optional per-projection bias vector `B[k]`.
+    If `Int(B[k]) != 0`, adds `B[k][r]` in-register before writing to `C[k][r]`.
+    Ideal for Whisper QKV (where Q and V have bias and K has null bias).
+    """
+    var blk_sz = Int(ggml_block_size(dtype))
+    var type_sz = Int(ggml_type_size(dtype))
+    var bytes_per_row = (nc // blk_sz) * type_sz
+
+    for r in range(row_start, row_end):
+        comptime for k in range(n):
+            var row_w_ptr = W[k].unsafe_offset(r * bytes_per_row)
+            var res = dot_quant_row(dtype, row_w_ptr, x, nc)
+            if Int(B[k]) != 0:
+                res += B[k][unsafe_offset=r]
+            C[k][unsafe_offset=r] = res
+
+
+@always_inline
+def gemv_quant_biased(
+        dst: FloatPtr,
+        w: BytePtr,
+        bias: FloatPtr,
+        dtype: UInt32,
+        x: FloatPtr,
+        rows: Int,
+        cols: Int,
+        workers: Int = 0,
+    ):
+    """ Perform matrix-vector product with bias `dst = w @ x + bias` using multi-threaded row chunking.
+    Supports nullable `bias` (if `Int(bias) == 0`, behaves identically to `gemv_quant`).
+    """
+    gemv_quant(dst, w, dtype, x, rows, cols, workers)
+    if Int(bias) != 0:
+        var i = 0
+        while i + SIMD_WIDTH <= rows:
+            var dv = dst.unsafe_load[width=SIMD_WIDTH](i)
+            var bv = bias.unsafe_load[width=SIMD_WIDTH](i)
+            dst.unsafe_store[width=SIMD_WIDTH](i, dv + bv)
+            i += SIMD_WIDTH
+        while i < rows:
+            dst[unsafe_offset=i] += bias[unsafe_offset=i]
+            i += 1
+
+
+@always_inline
+def gemv_gelu_biased(
+        dst: FloatPtr,
+        w: BytePtr,
+        bias: FloatPtr,
+        dtype: UInt32,
+        x: FloatPtr,
+        rows: Int,
+        cols: Int,
+        workers: Int = 0,
+    ):
+    """ Fused linear projection + bias + GELU activation (`dst = gelu(w @ x + bias)`),
+    used in Whisper Encoder & Decoder MLP first layer (`mlp.0`).
+    """
+    var blk_sz = Int(ggml_block_size(dtype))
+    var type_sz = Int(ggml_type_size(dtype))
+    var bpr = (cols // blk_sz) * type_sz
+    var has_bias = Int(bias) != 0
+
+    var n_workers = workers if workers > 0 else num_performance_cores()
+    if n_workers <= 1 or rows < 512:
+        for r in range(rows):
+            var w_row = w.unsafe_offset(r * bpr)
+            var val = dot_quant_row(dtype, w_row, x, cols)
+            if has_bias:
+                val += bias[unsafe_offset=r]
+            dst[unsafe_offset=r] = gelu(val)
+        return
+
+    var chunk = (rows + n_workers - 1) // n_workers
+
+    def worker_fn(wid: Int) {imm}:
+        var r_start = wid * chunk
+        var r_end = min((wid + 1) * chunk, rows)
+        for r in range(r_start, r_end):
+            var w_row = w.unsafe_offset(r * bpr)
+            var val = dot_quant_row(dtype, w_row, x, cols)
+            if has_bias:
+                val += bias[unsafe_offset=r]
+            dst[unsafe_offset=r] = gelu(val)
+
+    parallelize(worker_fn, n_workers, n_workers)
+
 # ─── Parallel Quantized GEMV ──────────────────────────────────────────────────
 
 @always_inline

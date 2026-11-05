@@ -1,3 +1,12 @@
+---
+type: howto
+title: "llamojo Pure-CPU Implementation Plan: Path to Full llama.cpp Parity"
+description: "Comprehensive plan establishing pure-Mojo execution milestones for prompt evaluation, token generation, and GGUF loading."
+status: completed
+tags: [cpu-plan, llama-cpp-parity, milestones, evaluation, pure-cpu]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # `llamojo` Pure-CPU Implementation Plan: Path to Full `llama.cpp` Parity
 
 This roadmap outlines the remaining implementation stages to elevate `llamojo` from its current Phase 4 status to complete pure-CPU feature parity with upstream `llama.cpp` (`libllama`), ordered strictly from **easiest / lowest risk** to **most complex / architecturally involved**.

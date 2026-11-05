@@ -96,6 +96,174 @@ def rms_norm(
         out_ptr[unsafe_offset=i] = x[unsafe_offset=i] * inv_rms * weight[unsafe_offset=i]
         i += 1
 
+
+# ─── Standard LayerNorm (Mean & Variance + Scale & Bias) ─────────────────────
+
+@always_inline
+def layer_norm(
+        out_ptr: FloatPtr,
+        x: FloatPtr,
+        weight: FloatPtr,
+        bias: FloatPtr,
+        n: Int,
+        eps: Float32 = 1e-5,
+    ):
+    """ Standard LayerNorm (ggml_norm + scale + bias, used by Whisper & BERT).
+    Computes:
+      mean = sum(x) / n
+      var  = sum((x - mean)^2) / n
+      out[i] = ((x[i] - mean) / sqrt(var + eps)) * weight[i] + bias[i]
+    Supports nullable weight (defaults to 1.0) and nullable bias (defaults to 0.0).
+    """
+    var sum_x: Float32 = 0.0
+    var i = 0
+    while i + SIMD_WIDTH <= n:
+        var xv = x.unsafe_load[width=SIMD_WIDTH](i)
+        sum_x += xv.reduce_add()
+        i += SIMD_WIDTH
+    while i < n:
+        sum_x += x[unsafe_offset=i]
+        i += 1
+
+    var mean = sum_x / Float32(n)
+    var mean_v = F32xW(mean)
+
+    var sum_sq: Float32 = 0.0
+    i = 0
+    while i + SIMD_WIDTH <= n:
+        var diff = x.unsafe_load[width=SIMD_WIDTH](i) - mean_v
+        sum_sq += (diff * diff).reduce_add()
+        i += SIMD_WIDTH
+    while i < n:
+        var diff = x[unsafe_offset=i] - mean
+        sum_sq += diff * diff
+        i += 1
+
+    var inv_std = Float32(1.0) / sqrt(sum_sq / Float32(n) + eps)
+    var inv_std_v = F32xW(inv_std)
+
+    var has_w = Int(weight) != 0
+    var has_b = Int(bias) != 0
+
+    i = 0
+    if has_w and has_b:
+        while i + SIMD_WIDTH <= n:
+            var xv = x.unsafe_load[width=SIMD_WIDTH](i)
+            var wv = weight.unsafe_load[width=SIMD_WIDTH](i)
+            var bv = bias.unsafe_load[width=SIMD_WIDTH](i)
+            out_ptr.unsafe_store[width=SIMD_WIDTH](i, (xv - mean_v) * inv_std_v * wv + bv)
+            i += SIMD_WIDTH
+        while i < n:
+            out_ptr[unsafe_offset=i] = (x[unsafe_offset=i] - mean) * inv_std * weight[unsafe_offset=i] + bias[unsafe_offset=i]
+            i += 1
+    elif has_w:
+        while i + SIMD_WIDTH <= n:
+            var xv = x.unsafe_load[width=SIMD_WIDTH](i)
+            var wv = weight.unsafe_load[width=SIMD_WIDTH](i)
+            out_ptr.unsafe_store[width=SIMD_WIDTH](i, (xv - mean_v) * inv_std_v * wv)
+            i += SIMD_WIDTH
+        while i < n:
+            out_ptr[unsafe_offset=i] = (x[unsafe_offset=i] - mean) * inv_std * weight[unsafe_offset=i]
+            i += 1
+    elif has_b:
+        while i + SIMD_WIDTH <= n:
+            var xv = x.unsafe_load[width=SIMD_WIDTH](i)
+            var bv = bias.unsafe_load[width=SIMD_WIDTH](i)
+            out_ptr.unsafe_store[width=SIMD_WIDTH](i, (xv - mean_v) * inv_std_v + bv)
+            i += SIMD_WIDTH
+        while i < n:
+            out_ptr[unsafe_offset=i] = (x[unsafe_offset=i] - mean) * inv_std + bias[unsafe_offset=i]
+            i += 1
+    else:
+        while i + SIMD_WIDTH <= n:
+            var xv = x.unsafe_load[width=SIMD_WIDTH](i)
+            out_ptr.unsafe_store[width=SIMD_WIDTH](i, (xv - mean_v) * inv_std_v)
+            i += SIMD_WIDTH
+        while i < n:
+            out_ptr[unsafe_offset=i] = (x[unsafe_offset=i] - mean) * inv_std
+            i += 1
+
+
+@always_inline
+def fused_layer_norm_residual(
+        x: FloatPtr,
+        residual: FloatPtr,
+        weight: FloatPtr,
+        bias: FloatPtr,
+        out_normed: FloatPtr,
+        out_residual: FloatPtr,
+        n: Int,
+        eps: Float32 = 1e-5,
+    ):
+    """ Fused residual addition and LayerNorm in minimal memory passes.
+    Computes:
+      out_residual[i] = x[i] + residual[i]
+      out_normed = LayerNorm(out_residual, weight, bias, eps)
+    """
+    var sum_x: Float32 = 0.0
+    var i = 0
+    while i + SIMD_WIDTH <= n:
+        var xv = x.unsafe_load[width=SIMD_WIDTH](i)
+        var rv = residual.unsafe_load[width=SIMD_WIDTH](i)
+        var sum_v = xv + rv
+        out_residual.unsafe_store[width=SIMD_WIDTH](i, sum_v)
+        sum_x += sum_v.reduce_add()
+        i += SIMD_WIDTH
+    while i < n:
+        var sum_s = x[unsafe_offset=i] + residual[unsafe_offset=i]
+        out_residual[unsafe_offset=i] = sum_s
+        sum_x += sum_s
+        i += 1
+
+    var mean = sum_x / Float32(n)
+    var mean_v = F32xW(mean)
+
+    var sum_sq: Float32 = 0.0
+    i = 0
+    while i + SIMD_WIDTH <= n:
+        var diff = out_residual.unsafe_load[width=SIMD_WIDTH](i) - mean_v
+        sum_sq += (diff * diff).reduce_add()
+        i += SIMD_WIDTH
+    while i < n:
+        var diff = out_residual[unsafe_offset=i] - mean
+        sum_sq += diff * diff
+        i += 1
+
+    var inv_std = Float32(1.0) / sqrt(sum_sq / Float32(n) + eps)
+    var inv_std_v = F32xW(inv_std)
+
+    var has_w = Int(weight) != 0
+    var has_b = Int(bias) != 0
+
+    i = 0
+    if has_w and has_b:
+        while i + SIMD_WIDTH <= n:
+            var rv = out_residual.unsafe_load[width=SIMD_WIDTH](i)
+            var wv = weight.unsafe_load[width=SIMD_WIDTH](i)
+            var bv = bias.unsafe_load[width=SIMD_WIDTH](i)
+            out_normed.unsafe_store[width=SIMD_WIDTH](i, (rv - mean_v) * inv_std_v * wv + bv)
+            i += SIMD_WIDTH
+        while i < n:
+            out_normed[unsafe_offset=i] = (out_residual[unsafe_offset=i] - mean) * inv_std * weight[unsafe_offset=i] + bias[unsafe_offset=i]
+            i += 1
+    elif has_w:
+        while i + SIMD_WIDTH <= n:
+            var rv = out_residual.unsafe_load[width=SIMD_WIDTH](i)
+            var wv = weight.unsafe_load[width=SIMD_WIDTH](i)
+            out_normed.unsafe_store[width=SIMD_WIDTH](i, (rv - mean_v) * inv_std_v * wv)
+            i += SIMD_WIDTH
+        while i < n:
+            out_normed[unsafe_offset=i] = (out_residual[unsafe_offset=i] - mean) * inv_std * weight[unsafe_offset=i]
+            i += 1
+    else:
+        while i + SIMD_WIDTH <= n:
+            var rv = out_residual.unsafe_load[width=SIMD_WIDTH](i)
+            out_normed.unsafe_store[width=SIMD_WIDTH](i, (rv - mean_v) * inv_std_v)
+            i += SIMD_WIDTH
+        while i < n:
+            out_normed[unsafe_offset=i] = (out_residual[unsafe_offset=i] - mean) * inv_std
+            i += 1
+
 # ─── Fused SwiGLU / GELU Activations ─────────────────────────────────────────
 
 @always_inline

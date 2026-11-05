@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Gemma 4 Architecture Support: Phase 2 Implementation Documentation"
+description: "Implementation and numerical verification of Proportional Logit Expansion (PLE) and per-head attention norm kernels."
+status: completed
+tags: [gemma4, phase2, ple, attention-norm, numerical-validation]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Gemma 4 Architecture Support: Phase 2 Implementation Documentation
 
 This document records the design, implementation, and verification of **Phase 2: Math Kernels: GELU, Double RMSNorm & Softcapping** for the Gemma 4 architecture (`gemma4`) in **llamojo**.
@@ -24,7 +33,7 @@ Phase 2 implements these mathematical primitives in pure Mojo with zero external
 
 ## 2. Implemented Kernels
 
-All kernels are implemented in [`src/llamojo/backend/kernels_norm_rope.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_norm_rope.mojo) and exposed through the library namespaces.
+All kernels are implemented in [`src/llamojo/backend/kernels_norm_rope.mojo`](../../src/llamojo/backend/kernels_norm_rope.mojo) and exposed through the library namespaces.
 
 ### A. Approximate GELU & Fused GELU-GLU
 

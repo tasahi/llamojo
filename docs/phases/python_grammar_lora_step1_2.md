@@ -1,3 +1,12 @@
+---
+type: reference
+title: "llamojo Python Integration: GBNF Grammar & LoRA C-ABI Exposition (Steps 1 & 2)"
+description: "Mojo C-ABI export functions for GBNF parser compilation, token masking, and LoRA adapter lifecycle."
+status: completed
+tags: [gbnf-grammar, lora, step1-2, c-abi-exports, token-masking]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # llamojo Python Integration: GBNF Grammar & LoRA C-ABI Exposition (Steps 1 & 2)
 
 ## Executive Summary
@@ -43,7 +52,7 @@ The following C symbols have been added to the public API with `@export ... abi(
 
 ## 2. Dynamic Library Verification (`build/libllamojo.so`)
 
-The shared library was compiled using [`tools/build_shared_lib.sh`](../tools/build_shared_lib.sh):
+The shared library was compiled using [`tools/build_shared_lib.sh`](../../tools/build_shared_lib.sh):
 ```bash
 ./tools/build_shared_lib.sh
 ```

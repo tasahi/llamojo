@@ -1,3 +1,12 @@
+---
+type: reference
+title: "Logprob Computation in llamojo"
+description: "High-performance token logprob extraction, top-k candidate ranking, and OpenAI API compliant schema formatting."
+status: completed
+tags: [logprobs, token-probabilities, top-k, openai-compliance]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Logprob Computation in `llamojo`
 
 ## Overview

@@ -1,3 +1,12 @@
+---
+type: concept
+title: "Feasibility Study: Native mmBERT / Gemma 2 Tokenizer Management in llamojo"
+description: "Architectural feasibility and design for integrating 256k-vocabulary Gemma 2 SentencePiece tokenizers into pure Mojo."
+status: completed
+tags: [mmbert, gemma2, sentencepiece, tokenizer, multilingual]
+timestamp: 2026-11-05T00:00:00Z
+---
+
 # Feasibility Study: Native mmBERT / Gemma 2 Tokenizer Management in `llamojo`
 
 ## 1. Executive Summary
