@@ -13,7 +13,13 @@ from .llama import (
     LogitsProcessorList,
     MinTokensLogitsProcessor,
 )
-from .hf_compat import CausalLMOutput, LlamojoForCausalLM, LlamojoTokenizer
+from .hf_compat import (
+    CausalLMOutput,
+    LlamojoForCausalLM,
+    LlamojoForSpeechSeq2Seq,
+    LlamojoTokenizer,
+)
+from .whisper import Whisper, WhisperSegmentResult
 from ._views import TensorView
 from .safetensors import SafetensorsFile, load_safetensors_dir, save_safetensors
 from .convert import convert_safetensors_to_gguf
@@ -21,8 +27,11 @@ from .weight_maps import hf_to_gguf_name, gguf_to_hf_name, permute_rope_hf_to_gg
 
 __all__ = [
     "LlamojoForCausalLM",
+    "LlamojoForSpeechSeq2Seq",
     "LlamojoTokenizer",
     "CausalLMOutput",
+    "Whisper",
+    "WhisperSegmentResult",
     "TensorView",
     "SafetensorsFile",
     "load_safetensors_dir",

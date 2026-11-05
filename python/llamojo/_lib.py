@@ -266,6 +266,48 @@ def get_lib() -> ctypes.CDLL:
     lib.llamojo_get_kv_view.argtypes = [ctypes.c_void_p, ctypes.c_int32, ctypes.c_void_p]
     lib.llamojo_get_kv_view.restype = ctypes.c_int32
 
+    # Whisper ASR C-ABI exports (optional if older libllamojo.so is loaded)
+    if hasattr(lib, "whisper_init_from_file"):
+        lib.whisper_init_from_file.argtypes = [ctypes.c_char_p]
+        lib.whisper_init_from_file.restype = ctypes.c_void_p
+
+        lib.whisper_free.argtypes = [ctypes.c_void_p]
+        lib.whisper_free.restype = None
+
+        lib.whisper_is_multilingual.argtypes = [ctypes.c_void_p]
+        lib.whisper_is_multilingual.restype = ctypes.c_int32
+
+        lib.whisper_full_c.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_float),
+            ctypes.c_int32,
+            ctypes.c_int32,
+            ctypes.c_int32,
+            ctypes.c_int32,
+        ]
+        lib.whisper_full_c.restype = ctypes.c_int32
+
+        lib.whisper_full_wav_c.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_int32,
+            ctypes.c_int32,
+            ctypes.c_int32,
+        ]
+        lib.whisper_full_wav_c.restype = ctypes.c_int32
+
+        lib.whisper_full_n_segments.argtypes = [ctypes.c_void_p]
+        lib.whisper_full_n_segments.restype = ctypes.c_int32
+
+        lib.whisper_full_get_segment_t0.argtypes = [ctypes.c_void_p, ctypes.c_int32]
+        lib.whisper_full_get_segment_t0.restype = ctypes.c_int64
+
+        lib.whisper_full_get_segment_t1.argtypes = [ctypes.c_void_p, ctypes.c_int32]
+        lib.whisper_full_get_segment_t1.restype = ctypes.c_int64
+
+        lib.whisper_full_get_segment_text.argtypes = [ctypes.c_void_p, ctypes.c_int32]
+        lib.whisper_full_get_segment_text.restype = ctypes.c_char_p
+
     lib.llama_backend_init()
     _lib = lib
     return _lib

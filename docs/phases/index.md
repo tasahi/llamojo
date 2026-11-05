@@ -28,6 +28,7 @@ entries:
   - whisper_phase2_implementation.md
   - whisper_phase3_implementation.md
   - whisper_phase4_implementation.md
+  - whisper_phase5_implementation.md
 tags: [llamojo, phases, implementation-phases, gemma4, acceleration, simd, python-c-abi, whisper]
 timestamp: 2026-11-05T00:00:00Z
 ---
@@ -99,8 +100,8 @@ Integrating OpenAI Whisper Encoder-Decoder speech recognition models natively in
 | [**Whisper Support: Phase 2**](./whisper_phase2_implementation.md) | `reference` | Completed | Audio DSP frontend: periodic Hann window, 400-point Cooley-Tukey FFT, multi-threaded Log-Mel spectrogram, and RIFF `.wav` loader. |
 | [**Whisper Support: Phase 3**](./whisper_phase3_implementation.md) | `reference` | Completed | Dual Model Loader: zero-copy `mmap64` support for legacy `whisper.cpp` `.bin` (`0x67676d6c`) and GGUF v2/v3 models, plus dynamic special/timestamp vocab. |
 | [**Whisper Support: Phase 4**](./whisper_phase4_implementation.md) | `reference` | Completed | Audio Encoder, static Cross-Attention KV precomputation (`kv_cross`), and Autoregressive Text Decoder (`whisper_encode`, `whisper_decode`). |
+| [**Whisper Support: Phase 5**](./whisper_phase5_implementation.md) | `reference` | Completed | Paired timestamp logit rules (`ApplyTimestampRules`), 30s seek loop (`whisper_full`), C-ABI exports, and Python `Whisper` / `LlamojoForSpeechSeq2Seq`. |
 
 ---
 
 To return to the root documentation index, see [**Main Documentation Bundle Index**](../index.md).
-

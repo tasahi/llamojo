@@ -7,6 +7,10 @@ Provides:
   `WhisperModel`, `whisper_load_model_from_file`)
 - Encoder & Decoder Execution (`WhisperState`, `get_embedding_row`, `whisper_encode_layer`,
   `whisper_build_cross_kv`, `whisper_encode`, `whisper_decode_step`, `whisper_decode`)
+- Timestamp Logit Rules & High-Level Transcription (`WhisperSegment`, `WhisperFullParams`,
+  `whisper_full_default_params`, `format_timestamp_cs`, `apply_whisper_logit_filters`,
+  `WhisperContext`, `whisper_init_from_file`, `whisper_full`, `whisper_full_n_segments`,
+  `whisper_full_get_segment_text`, `whisper_full_get_segment_t0`, `whisper_full_get_segment_t1`)
 """
 
 from .audio import (
@@ -42,4 +46,18 @@ from .model import (
     whisper_encode,
     whisper_decode_step,
     whisper_decode,
+)
+from .transcribe import (
+    WhisperSegment,
+    WhisperFullParams,
+    whisper_full_default_params,
+    format_timestamp_cs,
+    apply_whisper_logit_filters,
+    WhisperContext,
+    whisper_init_from_file,
+    whisper_full,
+    whisper_full_n_segments,
+    whisper_full_get_segment_text,
+    whisper_full_get_segment_t0,
+    whisper_full_get_segment_t1,
 )

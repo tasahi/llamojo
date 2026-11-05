@@ -2,7 +2,7 @@
 type: concept
 title: "Feasibility & Architectural Study: Whisper ASR Models in llamojo vs. Standalone Engine"
 description: "Comprehensive analysis of whisper.cpp C++ architecture, component overlap with llamojo, missing operator deltas, and strategic comparison between extending llamojo vs. creating a standalone project."
-status: active
+status: completed
 tags: [whisper, asr, audio-encoder-decoder, whisper-cpp, architecture-study, cross-attention, log-mel-spectrogram]
 timestamp: 2026-11-05T00:00:00Z
 ---

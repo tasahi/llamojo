@@ -22,6 +22,7 @@ TESTS=(
     "tests/test_whisper_phase2.mojo"
     "tests/test_whisper_phase3.mojo"
     "tests/test_whisper_phase4.mojo"
+    "tests/test_whisper_phase5.mojo"
 )
 
 echo "============================================================"

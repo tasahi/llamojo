@@ -1,11 +1,11 @@
-"""Tests for the Hugging Face-style facade, using a fake Llama (no model needed)."""
+""" Tests for the Hugging Face-style facade, using a fake Llama (no model needed)."""
 import unittest
 
-from llamojo.hf_compat import LlamojoForCausalLM
+from llamojo.hf_compat import LlamojoForCausalLM, LlamojoForSpeechSeq2Seq
 
 
 class FakeLlama:
-    """Deterministic stand-in: next token = (last token + 1) % 10; eos = 9."""
+    """ Deterministic stand-in: next token = (last token + 1) % 10; eos = 9."""
 
     n_vocab = 10
 
@@ -99,6 +99,42 @@ class TestHFCompat(unittest.TestCase):
         out = self.model.generate(ids, max_new_tokens=2, do_sample=False)
         self.assertIsInstance(out, torch.Tensor)
         self.assertEqual(out.tolist(), [[1, 2, 3, 4]])
+
+
+class FakeWhisper:
+    """ Deterministic stand-in for llamojo.Whisper."""
+
+    def __init__(self):
+        self.closed = False
+
+    def transcribe(self, audio, no_timestamps=False, translate=False):
+        return {
+            "text": " And so my fellow Americans.",
+            "segments": [
+                {
+                    "t0": 0,
+                    "t1": 350,
+                    "start": 0.0,
+                    "end": 3.5,
+                    "text": " And so my fellow Americans.",
+                }
+            ],
+        }
+
+    def close(self):
+        self.closed = True
+
+
+class TestSpeechSeq2SeqCompat(unittest.TestCase):
+    def test_speech_seq2seq_transcribe_and_chunks(self):
+        fake_w = FakeWhisper()
+        asr = LlamojoForSpeechSeq2Seq(fake_w)
+        res = asr("jfk.wav", return_timestamps=True)
+        self.assertEqual(res["text"], " And so my fellow Americans.")
+        self.assertEqual(len(res["chunks"]), 1)
+        self.assertEqual(res["chunks"][0]["timestamp"], (0.0, 3.5))
+        asr.close()
+        self.assertTrue(fake_w.closed)
 
 
 if __name__ == "__main__":

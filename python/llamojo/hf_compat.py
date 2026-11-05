@@ -231,3 +231,52 @@ class LlamojoForCausalLM:
         if was_flat and not (_torch is not None and isinstance(input_ids, _torch.Tensor)):
             return results[0] if isinstance(input_ids, (list, tuple)) else results
         return _wrap_like(results, input_ids)
+
+
+class LlamojoForSpeechSeq2Seq:
+    """ ``AutoModelForSpeechSeq2Seq`` / ASR pipeline-style wrapper over :class:`llamojo.Whisper`."""
+
+    def __init__(self, whisper_engine: Any):
+        self.whisper = whisper_engine
+        self.training = False
+
+    @classmethod
+    def from_pretrained(
+        cls, model_path: str, n_threads: int = 0, **kwargs: Any
+    ) -> "LlamojoForSpeechSeq2Seq":
+        from .whisper import Whisper
+
+        return cls(Whisper(model_path=os.path.abspath(model_path), n_threads=n_threads))
+
+    def eval(self) -> "LlamojoForSpeechSeq2Seq":
+        return self
+
+    def to(self, *args: Any, **kwargs: Any) -> "LlamojoForSpeechSeq2Seq":
+        return self
+
+    def close(self) -> None:
+        self.whisper.close()
+
+    def transcribe( self,
+        audio: Union[str, Sequence[float], Any],
+            return_timestamps: bool = True,
+            translate: bool = False,
+            **kwargs: Any,
+        ) -> Dict[str, Any]:
+        """ Transcribe audio and return ``{"text": ..., "chunks": ...}`` matching HF ASR pipeline conventions."""
+        res = self.whisper.transcribe(
+            audio,
+            no_timestamps=not return_timestamps,
+            translate=translate,
+        )
+        chunks = [
+            {"timestamp": (seg["start"], seg["end"]), "text": seg["text"]}
+            for seg in res.get("segments", [])
+        ]
+        return {
+            "text": res.get("text", ""),
+            "chunks": chunks,
+            "segments": res.get("segments", []),
+        }
+
+    __call__ = transcribe

@@ -77,6 +77,15 @@ from llamojo import (
     llama_vocab_n_tokens as _vocab_n_tokens,
     llama_vocab_add_special_token as _vocab_add_special_token,
     llama_vocab_find_token as _vocab_find_token,
+    WhisperContext,
+    WhisperFullParams,
+    whisper_init_from_file as _whisper_init_from_file,
+    whisper_full as _whisper_full,
+    whisper_full_n_segments as _whisper_full_n_segments,
+    whisper_full_get_segment_text as _whisper_full_get_segment_text,
+    whisper_full_get_segment_t0 as _whisper_full_get_segment_t0,
+    whisper_full_get_segment_t1 as _whisper_full_get_segment_t1,
+    load_wav_file as _load_wav_file,
     null_ptr,
 )
 
@@ -623,3 +632,110 @@ def llamojo_get_kv_view(ctx: llama_context_p, which_cache: Int32, out_view: llam
         return 0
     return -2
 
+
+# ─── Whisper ASR C-ABI Exports ────────────────────────────────────────────────
+
+comptime whisper_context_p = Pointer[WhisperContext, MutUntrackedOrigin]
+
+@export
+def whisper_init_from_file(path_cstr: BytePtr) abi("c") -> whisper_context_p:
+    """ Load a Whisper model (.bin or .gguf) and return an opaque WhisperContext pointer."""
+    if Int(path_cstr) == 0:
+        return null_ptr[WhisperContext]()
+    var path = _cstr_to_string(path_cstr)
+    try:
+        var ctx = _whisper_init_from_file(path)
+        var ptr = unsafe_alloc[WhisperContext](1)
+        ptr.unsafe_write(ctx^)
+        return ptr
+    except:
+        return null_ptr[WhisperContext]()
+
+@export
+def whisper_free(ctx: whisper_context_p) abi("c"):
+    """ Free a WhisperContext allocated by `whisper_init_from_file`."""
+    if Int(ctx) != 0:
+        ctx[].free()
+        ctx.unsafe_deinit_pointee()
+        ctx.unsafe_free()
+
+@export
+def whisper_is_multilingual(ctx: whisper_context_p) abi("c") -> Int32:
+    """ Return 1 if the loaded Whisper model is multilingual, 0 if English-only."""
+    if Int(ctx) == 0:
+        return 0
+    return 1 if ctx[].model.vocab.is_multilingual() else 0
+
+@export
+def whisper_full_c(
+        ctx: whisper_context_p,
+        samples: FloatPtr,
+        n_samples: Int32,
+        no_timestamps: Int32 = 0,
+        translate: Int32 = 0,
+        n_threads: Int32 = 0,
+    ) abi("c") -> Int32:
+    """ Run full Whisper transcription on 16 kHz mono F32 PCM samples."""
+    if Int(ctx) == 0 or Int(samples) == 0 or n_samples <= 0:
+        return -1
+    var params = WhisperFullParams()
+    params.no_timestamps = (no_timestamps != 0)
+    params.translate = (translate != 0)
+    params.n_threads = Int(n_threads)
+    return Int32(_whisper_full(ctx[], params, samples, Int(n_samples)))
+
+@export
+def whisper_full_wav_c(
+        ctx: whisper_context_p,
+        wav_path_cstr: BytePtr,
+        no_timestamps: Int32 = 0,
+        translate: Int32 = 0,
+        n_threads: Int32 = 0,
+    ) abi("c") -> Int32:
+    """ Load a 16 kHz .wav file and run full Whisper transcription."""
+    if Int(ctx) == 0 or Int(wav_path_cstr) == 0:
+        return -1
+    var wav_path = _cstr_to_string(wav_path_cstr)
+    try:
+        var pcm = _load_wav_file(wav_path)
+        var params = WhisperFullParams()
+        params.no_timestamps = (no_timestamps != 0)
+        params.translate = (translate != 0)
+        params.n_threads = Int(n_threads)
+        return Int32(_whisper_full(ctx[], params, pcm))
+    except:
+        return -2
+
+@export
+def whisper_full_n_segments(ctx: whisper_context_p) abi("c") -> Int32:
+    """ Return the number of decoded segments in `ctx`."""
+    if Int(ctx) == 0:
+        return 0
+    return Int32(_whisper_full_n_segments(ctx[]))
+
+@export
+def whisper_full_get_segment_t0(ctx: whisper_context_p, i_segment: Int32) abi("c") -> Int64:
+    """ Return the start timestamp (in 10ms centiseconds) of segment `i_segment`."""
+    if Int(ctx) == 0:
+        return 0
+    return _whisper_full_get_segment_t0(ctx[], Int(i_segment))
+
+@export
+def whisper_full_get_segment_t1(ctx: whisper_context_p, i_segment: Int32) abi("c") -> Int64:
+    """ Return the end timestamp (in 10ms centiseconds) of segment `i_segment`."""
+    if Int(ctx) == 0:
+        return 0
+    return _whisper_full_get_segment_t1(ctx[], Int(i_segment))
+
+@export
+def whisper_full_get_segment_text(ctx: whisper_context_p, i_segment: Int32) abi("c") -> BytePtr:
+    """ Return a null-terminated UTF-8 C string for segment `i_segment`."""
+    if Int(ctx) == 0:
+        return null_ptr[UInt8]()
+    var txt = _whisper_full_get_segment_text(ctx[], Int(i_segment))
+    var bytes = txt.as_bytes()
+    ctx[].last_cstr.clear()
+    for b in range(len(bytes)):
+        ctx[].last_cstr.append(bytes[b])
+    ctx[].last_cstr.append(0)
+    return BytePtr(unsafe_from_address=Int(ctx[].last_cstr.unsafe_ptr()))
