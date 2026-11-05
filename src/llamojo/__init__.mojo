@@ -290,4 +290,12 @@ from .whisper import (
     log_mel_spectrogram,
     load_wav_file,
     load_filters_from_whisper_bin,
+    WHISPER_BIN_MAGIC,
+    WhisperHParams,
+    WhisperVocab,
+    WhisperEncoderLayer,
+    WhisperDecoderLayer,
+    WhisperTensorEntry,
+    WhisperModel,
+    whisper_load_model_from_file,
 )

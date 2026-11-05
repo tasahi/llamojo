@@ -20,6 +20,7 @@ TESTS=(
     "tests/test_micro_arch.mojo"
     "tests/test_whisper_phase1.mojo"
     "tests/test_whisper_phase2.mojo"
+    "tests/test_whisper_phase3.mojo"
 )
 
 echo "============================================================"

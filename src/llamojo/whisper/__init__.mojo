@@ -3,6 +3,8 @@
 Provides:
 - Audio DSP frontend (`WhisperFilters`, `WhisperMel`, `WhisperTrigCache`, `whisper_dft`, `whisper_fft`,
   `log_mel_spectrogram`, `load_wav_file`, `load_filters_from_whisper_bin`)
+- Dual Model Loader (`WhisperHParams`, `WhisperVocab`, `WhisperEncoderLayer`, `WhisperDecoderLayer`,
+  `WhisperModel`, `whisper_load_model_from_file`)
 """
 
 from .audio import (
@@ -20,4 +22,13 @@ from .audio import (
     load_wav_file,
     load_filters_from_whisper_bin,
 )
-
+from .loader import (
+    WHISPER_BIN_MAGIC,
+    WhisperHParams,
+    WhisperVocab,
+    WhisperEncoderLayer,
+    WhisperDecoderLayer,
+    WhisperTensorEntry,
+    WhisperModel,
+    whisper_load_model_from_file,
+)

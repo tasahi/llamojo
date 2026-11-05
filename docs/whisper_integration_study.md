@@ -173,4 +173,3 @@ src/llamojo/
 1. Implement Whisper's special token suppression (`suppress_blank`, `suppress_nst`) and paired timestamp constraints (`ApplyTimestampRules`).
 2. Expose C-ABI functions (`whisper_init_from_file`, `whisper_full`, `whisper_full_n_segments`, `whisper_full_get_segment_text`, `whisper_full_get_segment_t0`, `whisper_full_get_segment_t1`) in `libllamojo.so`.
 3. Add `llamojo.Whisper` and `hf_compat` `AutoModelForSpeechSeq2Seq` in Python.
-
