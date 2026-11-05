@@ -145,13 +145,18 @@ def dot_f32_row(w: FloatPtr, x: FloatPtr, nc: Int) -> Float32:
 
 @always_inline
 def dot_f16_row(w: BytePtr, x: FloatPtr, nc: Int) -> Float32:
-    """ F16 weights dot product against Float32 vector."""
-    var total: Float32 = 0.0
-    for i in range(nc):
-        var lo = UInt16(w[unsafe_offset=i * 2])
-        var hi = UInt16(w[unsafe_offset=i * 2 + 1])
-        var wf = f16_to_f32((hi << 8) | lo)
-        total += wf * x[unsafe_offset=i]
+    """ F16 weights dot product against Float32 vector with SIMD Float16 -> Float32 acceleration."""
+    var w_f16 = w.unsafe_bitcast[Float16]()
+    var acc = F32xW(0.0)
+    var i = 0
+    while i + SIMD_WIDTH <= nc:
+        var w_vec = w_f16.unsafe_load[width=SIMD_WIDTH](i).cast[DType.float32]()
+        acc += w_vec * x.unsafe_load[width=SIMD_WIDTH](i)
+        i += SIMD_WIDTH
+    var total = acc.reduce_add()
+    while i < nc:
+        total += Float32(w_f16[unsafe_offset=i]) * x[unsafe_offset=i]
+        i += 1
     return total
 
 @always_inline

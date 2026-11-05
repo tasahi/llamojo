@@ -298,4 +298,11 @@ from .whisper import (
     WhisperTensorEntry,
     WhisperModel,
     whisper_load_model_from_file,
+    WhisperState,
+    get_embedding_row,
+    whisper_encode_layer,
+    whisper_build_cross_kv,
+    whisper_encode,
+    whisper_decode_step,
+    whisper_decode,
 )

@@ -5,6 +5,8 @@ Provides:
   `log_mel_spectrogram`, `load_wav_file`, `load_filters_from_whisper_bin`)
 - Dual Model Loader (`WhisperHParams`, `WhisperVocab`, `WhisperEncoderLayer`, `WhisperDecoderLayer`,
   `WhisperModel`, `whisper_load_model_from_file`)
+- Encoder & Decoder Execution (`WhisperState`, `get_embedding_row`, `whisper_encode_layer`,
+  `whisper_build_cross_kv`, `whisper_encode`, `whisper_decode_step`, `whisper_decode`)
 """
 
 from .audio import (
@@ -31,4 +33,13 @@ from .loader import (
     WhisperTensorEntry,
     WhisperModel,
     whisper_load_model_from_file,
+)
+from .model import (
+    WhisperState,
+    get_embedding_row,
+    whisper_encode_layer,
+    whisper_build_cross_kv,
+    whisper_encode,
+    whisper_decode_step,
+    whisper_decode,
 )
