@@ -26,14 +26,14 @@ Phase 1 of the Whisper ASR integration into `llamojo` establishes all foundation
 
 ## 2. Implemented Kernels & File Mapping
 
-### 2.1 [`src/llamojo/backend/kernels_norm_rope.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_norm_rope.mojo)
+### 2.1 [`src/llamojo/backend/kernels_norm_rope.mojo`](../../src/llamojo/backend/kernels_norm_rope.mojo)
 - **`layer_norm(out_ptr, x, weight, bias, n, eps=1e-5)`**:
   - Computes $\mu = \frac{1}{n}\sum x_i$ and $\sigma^2 = \frac{1}{n}\sum (x_i - \mu)^2$ using `SIMD_WIDTH` horizontal reductions.
   - Applies $(x_i - \mu) \cdot (\sigma^2 + \epsilon)^{-1/2} \cdot \gamma_i + \beta_i$, gracefully handling nullable `weight` or `bias` pointers.
 - **`fused_layer_norm_residual(x, residual, weight, bias, out_normed, out_residual, n, eps=1e-5)`**:
   - Fuses residual addition `out_residual = x + residual` with mean computation in the first SIMD pass, eliminating redundant memory round-trips.
 
-### 2.2 [`src/llamojo/backend/kernels_quant.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_quant.mojo)
+### 2.2 [`src/llamojo/backend/kernels_quant.mojo`](../../src/llamojo/backend/kernels_quant.mojo)
 - **`matmul_quant_fused_biased[n](dtype, C, x, W, B, row_start, row_end, nc)`**:
   - Extends `matmul_quant_fused` with a `StaticTuple[FloatPtr, n]` of bias pointers `B`.
   - When `Int(B[k]) != 0`, adds `B[k][r]` in-register before writing to `C[k][r]`. Directly models Whisper QKV where `B = (bq, null_ptr, bv)`.
@@ -42,7 +42,7 @@ Phase 1 of the Whisper ASR integration into `llamojo` establishes all foundation
 - **`gemv_gelu_biased(dst, w, bias, dtype, x, rows, cols, workers)`**:
   - Fuses `dot_quant_row` + bias addition + `gelu()` in a single register pass for Whisper's `mlp.0` expansion layer ($d \to 4d$).
 
-### 2.3 [`src/llamojo/backend/kernels_conv.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_conv.mojo)
+### 2.3 [`src/llamojo/backend/kernels_conv.mojo`](../../src/llamojo/backend/kernels_conv.mojo)
 - **`conv1d_f32(...)`**:
   - Reference general 1D convolution supporting arbitrary `kernel_size`, `stride`, `padding`, `F32`/`F16` weights, bias, and optional `GELU`.
 - **`conv1d_k3_gelu(...)`**:
@@ -54,7 +54,7 @@ Phase 1 of the Whisper ASR integration into `llamojo` establishes all foundation
 
 ## 3. Verification
 
-Unit tests in [`tests/test_whisper_phase1.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_whisper_phase1.mojo) verify:
+Unit tests in [`tests/test_whisper_phase1.mojo`](../../tests/test_whisper_phase1.mojo) verify:
 - Numerical accuracy of `layer_norm` and `fused_layer_norm_residual` against analytical ground truth.
 - `matmul_quant_fused_biased` with mixed biased (`Q`, `V`) and unbiased (`K`) projections.
 - `gemv_quant_biased` and `gemv_gelu_biased` accuracy.
