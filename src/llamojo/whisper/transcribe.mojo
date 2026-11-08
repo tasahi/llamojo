@@ -81,25 +81,31 @@ struct WhisperFullParams(Copyable, Movable):
     var temperature: Float32
     var max_initial_ts: Float32
     var no_speech_thold: Float32
+    var silence_thold: Float32
+    var print_realtime: Bool
+    var initial_prompt: String
 
     def __init__(out self):
         self.n_threads = 0
         self.offset_ms = 0
         self.duration_ms = 0
         self.translate = False
-        self.no_context = True
+        self.no_context = False
         self.no_timestamps = False
         self.single_segment = False
         self.print_special = False
+        self.print_realtime = False
         self.print_timestamps = True
         self.max_tokens = 0
         self.audio_ctx = 0
         self.language = String("en")
+        self.initial_prompt = String("")
         self.suppress_blank = True
         self.suppress_nst = False
         self.temperature = 0.0
         self.max_initial_ts = 1.0
         self.no_speech_thold = 0.6
+        self.silence_thold = 0.001
 
     def __copyinit__(out self, existing: Self):
         self.n_threads = existing.n_threads
@@ -110,20 +116,55 @@ struct WhisperFullParams(Copyable, Movable):
         self.no_timestamps = existing.no_timestamps
         self.single_segment = existing.single_segment
         self.print_special = existing.print_special
+        self.print_realtime = existing.print_realtime
         self.print_timestamps = existing.print_timestamps
         self.max_tokens = existing.max_tokens
         self.audio_ctx = existing.audio_ctx
         self.language = existing.language
+        self.initial_prompt = existing.initial_prompt
         self.suppress_blank = existing.suppress_blank
         self.suppress_nst = existing.suppress_nst
         self.temperature = existing.temperature
         self.max_initial_ts = existing.max_initial_ts
         self.no_speech_thold = existing.no_speech_thold
+        self.silence_thold = existing.silence_thold
 
 
 def whisper_full_default_params() -> WhisperFullParams:
     """ Return default `WhisperFullParams` matching `whisper_full_default_params(WHISPER_SAMPLING_GREEDY)`."""
     return WhisperFullParams()
+
+
+def whisper_lang_id(lang: String) -> Int:
+    """ Map ISO 639-1 / language name to Whisper's 0-based language ID (`0..99`), or `-1` for `'auto'`."""
+    if lang == "" or lang == "auto":
+        return -1
+    var codes: List[String] = [
+        "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr",
+        "pl", "ca", "nl", "ar", "sv", "it", "id", "hi", "fi", "vi",
+        "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no",
+        "th", "ur", "hr", "bg", "lt", "la", "mi", "ml", "cy", "sk",
+        "te", "fa", "lv", "bn", "sr", "az", "sl", "kn", "et", "mk",
+        "br", "eu", "is", "hy", "ne", "mn", "bs", "kk", "sq", "sw",
+        "gl", "mr", "pa", "si", "km", "sn", "yo", "so", "af", "oc",
+        "ka", "be", "tg", "sd", "gu", "am", "yi", "lo", "uz", "fo",
+        "ht", "ps", "tk", "nn", "mt", "sa", "lb", "my", "bo", "tl",
+        "mg", "as", "tt", "haw", "ln", "ha", "ba", "jw", "su", "yue",
+    ]
+    for i in range(len(codes)):
+        if codes[i] == lang:
+            return i
+    if lang == "spanish":
+        return 3
+    elif lang == "english":
+        return 0
+    elif lang == "portuguese":
+        return 8
+    elif lang == "french":
+        return 6
+    elif lang == "german":
+        return 2
+    return -1
 
 
 # ─── Timestamp Formatting Helper ─────────────────────────────────────────────
@@ -328,6 +369,7 @@ def whisper_full(
         params: WhisperFullParams,
         samples: FloatPtr,
         n_samples: Int,
+        initial_prompt_tokens: List[Int32] = List[Int32](),
     ) -> Int:
     """ Run full end-to-end Whisper ASR transcription on 16 kHz mono PCM `samples[0 .. n_samples - 1]`.
     Populates `ctx.segments` and returns `0` on success.
@@ -355,32 +397,93 @@ def whisper_full(
     if seek_end < seek_start + delta_min:
         return 0
 
-    # Build initial task prompt: [SOT, (lang, task), (NOT)]
-    var prompt_init = List[Int32]()
-    prompt_init.append(ctx.model.vocab.token_sot)
-    if ctx.model.vocab.is_multilingual():
-        # Default to English (lang_id = 0 -> token_sot + 1)
-        prompt_init.append(ctx.model.vocab.token_sot + 1)
-        if params.translate:
-            prompt_init.append(ctx.model.vocab.token_translate)
-        else:
-            prompt_init.append(ctx.model.vocab.token_transcribe)
-
-    if params.no_timestamps:
-        prompt_init.append(ctx.model.vocab.token_not)
-
+    var lang_id = whisper_lang_id(params.language)
     var seek = seek_start
     var eot_id = Int(ctx.model.vocab.token_eot)
     var beg_id = Int(ctx.model.vocab.token_beg)
     var n_logits = ctx.model.vocab.n_vocab
     var n_max = ctx.model.hparams.n_text_ctx // 2 - 4
+    var prompt_past = List[Int32]()
+
+    # Seed initial context prompt if provided
+    for p_tok in range(len(initial_prompt_tokens)):
+        prompt_past.append(initial_prompt_tokens[p_tok])
 
     while seek + delta_min < seek_end:
+        # 0. Energy-Based Silence Skipper (VAD)
+        # Evaluates peak audio energy in the 30-second window [seek .. min(seek_end, seek + 3000)].
+        # If the entire window is quiet/silent, skip heavy neural network encoding & decoding.
+        if params.silence_thold > 0.0 and n_samples > 0 and Int(samples) != 0:
+            var samp_start = seek * 160
+            var samp_end = min(n_samples, (seek + 100 * WHISPER_CHUNK_SIZE) * 160)
+            if samp_end > samp_start:
+                var sub_len = 8000  # 0.5s subwindow
+                var max_sub_energy: Float32 = 0.0
+                var pos = samp_start
+                while pos < samp_end:
+                    var cur_sub_end = min(samp_end, pos + sub_len)
+                    var sub_cnt = cur_sub_end - pos
+                    if sub_cnt > 0:
+                        var sub_sum: Float32 = 0.0
+                        for s_idx in range(pos, cur_sub_end):
+                            var val = samples[unsafe_offset=s_idx]
+                            sub_sum += val * val
+                        var sub_rms = (sub_sum / Float32(sub_cnt))
+                        if sub_rms > max_sub_energy:
+                            max_sub_energy = sub_rms
+                    pos += sub_len
+
+                # If maximum 0.5s RMS energy is below the silence threshold (squared comparison)
+                if max_sub_energy < (params.silence_thold * params.silence_thold):
+                    var skip_delta = min(100 * WHISPER_CHUNK_SIZE, seek_end - seek)
+                    if params.print_realtime:
+                        var t0_sil = Int64(seek)
+                        var t1_sil = Int64(seek + skip_delta)
+                        print("[" + format_timestamp_cs(t0_sil) + " --> " + format_timestamp_cs(t1_sil) + "] [Silence]")
+                    seek += skip_delta
+                    continue
+
         # 1. Encode 30-second audio window starting at `seek`
         whisper_encode(ctx.model, ctx.state, seek, params.n_threads)
 
         # 2. Reset decoder self-attention KV cache and evaluate prompt_init
         ctx.state.reset_kv_self()
+
+        # Auto-detect language on the first encoded window if multilingual and lang_id < 0
+        if ctx.model.vocab.is_multilingual() and lang_id < 0:
+            whisper_decode_step(ctx.model, ctx.state, ctx.model.vocab.token_sot, 0, True, params.n_threads)
+            var best_lang_tok = Int(ctx.model.vocab.token_sot) + 1
+            var best_lang_logit: Float32 = NEG_INF
+            for lt in range(Int(ctx.model.vocab.token_sot) + 1, Int(ctx.model.vocab.token_translate)):
+                var lv = ctx.state.logits[unsafe_offset=lt]
+                if lv > best_lang_logit:
+                    best_lang_logit = lv
+                    best_lang_tok = lt
+            lang_id = best_lang_tok - (Int(ctx.model.vocab.token_sot) + 1)
+            ctx.state.lang_id = lang_id
+            ctx.state.reset_kv_self()
+
+        var prompt_init = List[Int32]()
+
+        # Prepend prior text / vocabulary prompt via <|startofprev|> if available
+        if not params.no_context and len(prompt_past) > 0:
+            prompt_init.append(ctx.model.vocab.token_prev)
+            var n_take = min(len(prompt_past), 224)
+            for p_idx in range(len(prompt_past) - n_take, len(prompt_past)):
+                prompt_init.append(prompt_past[p_idx])
+
+        prompt_init.append(ctx.model.vocab.token_sot)
+        if ctx.model.vocab.is_multilingual():
+            var resolved_lang = lang_id if lang_id >= 0 else 0
+            prompt_init.append(ctx.model.vocab.token_sot + 1 + Int32(resolved_lang))
+            if params.translate:
+                prompt_init.append(ctx.model.vocab.token_translate)
+            else:
+                prompt_init.append(ctx.model.vocab.token_transcribe)
+
+        if params.no_timestamps:
+            prompt_init.append(ctx.model.vocab.token_not)
+
         whisper_decode(ctx.model, ctx.state, prompt_init, 0, params.n_threads)
 
         # Compute no_speech_prob from initial unfiltered logits
@@ -400,6 +503,7 @@ def whisper_full(
         var has_ts = False
         var result_len = 0
         var n_past = len(prompt_init)
+        var loop_detected = False
 
         # 3. Autoregressive token generation loop
         for step in range(n_max):
@@ -425,9 +529,31 @@ def whisper_full(
 
             tokens_cur.append(Int32(best_id))
 
+            # Periodic sequence repetition detector (detects repeating phrases like "¿Eso es un tema?" or "Muy bien.")
+            var cur_len = len(tokens_cur)
+            if cur_len >= 12:
+                # Check for repeating period P from 2 to 12 tokens
+                for p in range(2, 13):
+                    if cur_len >= 3 * p:
+                        var matches = True
+                        for k in range(2 * p):
+                            if tokens_cur[cur_len - 1 - k] != tokens_cur[cur_len - 1 - k - p]:
+                                matches = False
+                                break
+                        if matches:
+                            loop_detected = True
+                            break
+                if loop_detected:
+                    break
+
             if best_id > beg_id:
                 var seek_delta_new = 2 * (best_id - beg_id)
                 if has_ts and seek_delta > seek_delta_new and result_len < step:
+                    break
+                # Guard against degenerate 0-duration timestamp loops
+                if has_ts and seek_delta_new <= seek_delta and result_len >= 4:
+                    # Timestamp is not progressing forward in time
+                    loop_detected = True
                     break
                 seek_delta = seek_delta_new
                 result_len = step + 1
@@ -447,9 +573,19 @@ def whisper_full(
                     seek_delta = 100 * WHISPER_CHUNK_SIZE
                 break
 
+            # Guard against repetition loop at end of context budget (`whisper.cpp:7607`)
+            if step == n_max - 1 and (result_len == 0 or seek_delta < (100 * WHISPER_CHUNK_SIZE) // 2):
+                seek_delta = 100 * WHISPER_CHUNK_SIZE
+                break
+
             # Decode next step
             whisper_decode_step(ctx.model, ctx.state, Int32(best_id), n_past, True, params.n_threads)
             n_past += 1
+
+        if loop_detected:
+            # Drop trailing repetitive tokens and advance window by 30s
+            if result_len > 0 and seek_delta < (100 * WHISPER_CHUNK_SIZE) // 2:
+                seek_delta = 100 * WHISPER_CHUNK_SIZE
 
         # 4. Extract segments from `tokens_cur[0 .. result_len - 1]`
         if result_len > 0:
@@ -469,6 +605,8 @@ def whisper_full(
                 if tid > beg_id and not params.single_segment:
                     var t1 = Int64(seek + 2 * (tid - beg_id))
                     if text.byte_length() > 0:
+                        if params.print_realtime:
+                            print("[" + format_timestamp_cs(t0) + " --> " + format_timestamp_cs(t1) + "] " + text)
                         var seg = WhisperSegment(t0, t1, text, no_speech_prob)
                         seg.tokens = seg_tokens^
                         ctx.segments.append(seg^)
@@ -483,10 +621,23 @@ def whisper_full(
 
             if text.byte_length() > 0:
                 var t1 = Int64(min(seek + seek_delta, seek_end))
+                if params.print_realtime:
+                    print("[" + format_timestamp_cs(t0) + " --> " + format_timestamp_cs(t1) + "] " + text)
                 var seg = WhisperSegment(t0, t1, text, no_speech_prob)
                 seg.tokens = seg_tokens^
                 ctx.segments.append(seg^)
 
+            # Update rolling context for subsequent 30s windows
+            if not params.no_context:
+                prompt_past.clear()
+                for c_tok in range(result_len):
+                    var tid_c = Int(tokens_cur[c_tok])
+                    if tid_c < eot_id:
+                        prompt_past.append(Int32(tid_c))
+
+        # Guarantee forward progress across windows
+        if seek_delta < 100:
+            seek_delta = 100 * WHISPER_CHUNK_SIZE
         seek += seek_delta
 
     return 0

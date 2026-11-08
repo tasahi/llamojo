@@ -246,7 +246,7 @@ class LlamojoForSpeechSeq2Seq:
     ) -> "LlamojoForSpeechSeq2Seq":
         from .whisper import Whisper
 
-        return cls(Whisper(model_path=os.path.abspath(model_path), n_threads=n_threads))
+        return cls(Whisper(model_path=model_path, n_threads=n_threads))
 
     def eval(self) -> "LlamojoForSpeechSeq2Seq":
         return self

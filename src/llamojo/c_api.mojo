@@ -685,6 +685,43 @@ def whisper_full_c(
     return Int32(_whisper_full(ctx[], params, samples, Int(n_samples)))
 
 @export
+def whisper_full_ex_c(
+        ctx: whisper_context_p,
+        samples: FloatPtr,
+        n_samples: Int32,
+        language_cstr: BytePtr,
+        no_timestamps: Int32 = 0,
+        translate: Int32 = 0,
+        n_threads: Int32 = 0,
+        offset_ms: Int32 = 0,
+        duration_ms: Int32 = 0,
+        print_realtime: Int32 = 0,
+        no_context: Int32 = 0,
+        prompt_tokens: Pointer[Int32, MutUntrackedOrigin] = null_ptr[Int32](),
+        n_prompt_tokens: Int32 = 0,
+    ) abi("c") -> Int32:
+    """ Extended Whisper transcription with language, offset_ms, duration_ms, print_realtime, no_context, and initial_prompt tokens."""
+    if Int(ctx) == 0 or Int(samples) == 0 or n_samples <= 0:
+        return -1
+    var params = WhisperFullParams()
+    if Int(language_cstr) != 0:
+        params.language = _cstr_to_string(language_cstr)
+    params.no_timestamps = (no_timestamps != 0)
+    params.translate = (translate != 0)
+    params.n_threads = Int(n_threads)
+    params.offset_ms = Int(offset_ms)
+    params.duration_ms = Int(duration_ms)
+    params.print_realtime = (print_realtime != 0)
+    params.no_context = (no_context != 0)
+
+    var p_tokens = List[Int32]()
+    if Int(prompt_tokens) != 0 and n_prompt_tokens > 0:
+        for i in range(Int(n_prompt_tokens)):
+            p_tokens.append(prompt_tokens[unsafe_offset=i])
+
+    return Int32(_whisper_full(ctx[], params, samples, Int(n_samples), p_tokens))
+
+@export
 def whisper_full_wav_c(
         ctx: whisper_context_p,
         wav_path_cstr: BytePtr,

@@ -136,6 +136,16 @@ class TestSpeechSeq2SeqCompat(unittest.TestCase):
         asr.close()
         self.assertTrue(fake_w.closed)
 
+    def test_resolve_path_missing_leading_slash_and_load_audio_16k(self):
+        from llamojo.whisper import _resolve_path, load_audio_16k
+
+        # Missing leading slash on 'mnt/c/...' should resolve to '/mnt/c/...'
+        resolved = _resolve_path("mnt/c/Documents/Programming/whisper.cpp/samples/jfk.wav")
+        self.assertEqual(resolved, "/mnt/c/Documents/Programming/whisper.cpp/samples/jfk.wav")
+
+        pcm = load_audio_16k(resolved)
+        self.assertEqual(len(pcm), 176000)
+
 
 if __name__ == "__main__":
     unittest.main()

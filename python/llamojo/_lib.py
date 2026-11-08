@@ -287,6 +287,24 @@ def get_lib() -> ctypes.CDLL:
         ]
         lib.whisper_full_c.restype = ctypes.c_int32
 
+        if hasattr(lib, "whisper_full_ex_c"):
+            lib.whisper_full_ex_c.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.c_int32,
+                ctypes.c_char_p,
+                ctypes.c_int32,
+                ctypes.c_int32,
+                ctypes.c_int32,
+                ctypes.c_int32,
+                ctypes.c_int32,
+                ctypes.c_int32,
+                ctypes.c_int32,
+                ctypes.POINTER(ctypes.c_int32),
+                ctypes.c_int32,
+            ]
+            lib.whisper_full_ex_c.restype = ctypes.c_int32
+
         lib.whisper_full_wav_c.argtypes = [
             ctypes.c_void_p,
             ctypes.c_char_p,
