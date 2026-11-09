@@ -37,7 +37,7 @@ This document identifies the **5 architectural and functional gaps** that must b
 
 ### Gap 1: Decoupling `llamojo/llama.mojo` from Procedural Execution
 * **The Issue**:
-  In [`src/llamojo/llama.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/llama.mojo#L705-L715):
+  In [`src/llamojo/llama.mojo`](../src/llamojo/llama.mojo#L705-L715):
   ```mojo
   for l_idx in range(n_layers):
       forward_layer_dense(
@@ -68,10 +68,10 @@ This document identifies the **5 architectural and functional gaps** that must b
 ### Gap 2: Harmonizing PagedAttention & Sliding Window KV Cache
 * **Status**: **Closed**
 * **Resolution**:
-  - Implemented `PagedKVView` in [`ggojo/src/ggojo/core/kv_paged.mojo`](file:///mnt/c/Documents/Mojo/ggojo/src/ggojo/core/kv_paged.mojo) providing indirect physical memory resolution via `logical_map` page tables as well as flat contiguous fallbacks.
-  - Implemented `paged_gqa_decode` kernel in [`ggojo/src/ggojo/kernels/attn.mojo`](file:///mnt/c/Documents/Mojo/ggojo/src/ggojo/kernels/attn.mojo) supporting Grouped-Query Attention, causal masking, and rolling Sliding Window Attention (SWA).
+  - Implemented `PagedKVView` in [`ggojo/src/ggojo/core/kv_paged.mojo`](../../ggojo/src/ggojo/core/kv_paged.mojo) providing indirect physical memory resolution via `logical_map` page tables as well as flat contiguous fallbacks.
+  - Implemented `paged_gqa_decode` kernel in [`ggojo/src/ggojo/kernels/attn.mojo`](../../ggojo/src/ggojo/kernels/attn.mojo) supporting Grouped-Query Attention, causal masking, and rolling Sliding Window Attention (SWA).
   - Extended `TransformerBlockNode` and `Gemma4BlockNode` to accept `PagedKVView` instances.
-  - Added `get_paged_view(layer, sliding_window)` to `LlamaKVCache` in [`src/llamojo/kv_cache.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/kv_cache.mojo) and integrated it directly into macro-block graph initialization in [`src/llamojo/llama.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/llama.mojo).
+  - Added `get_paged_view(layer, sliding_window)` to `LlamaKVCache` in [`src/llamojo/kv_cache.mojo`](../src/llamojo/kv_cache.mojo) and integrated it directly into macro-block graph initialization in [`src/llamojo/llama.mojo`](../src/llamojo/llama.mojo).
 
 ---
 

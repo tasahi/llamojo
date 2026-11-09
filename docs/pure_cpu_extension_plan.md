@@ -52,7 +52,7 @@ In Phase 4, `llama_model_quantize` established streaming block-quantization for 
 - **Implementation:** Added full recursive GGUF value serialization (`_serialize_gguf_value`) supporting all scalar primitives (`UINT8`..`FLOAT64`, `BOOL`, `STRING`) and arrays (`STRING` token lists, `FLOAT32` scores, integer sequences).
 - **Metadata Preservation:** Replicates all key-value entries from `gguf.metadata`, writes updated `general.file_type = ftype`, and inserts `general.quantization_version = 2`.
 - **Stream Alignment:** Preserves strict 32-byte alignment for the header-to-tensor payload boundary and for every serialized quantized tensor.
-- **Verification:** Tested in [`tests/test_vocab_sampler.mojo:test_full_metadata_quantization`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_vocab_sampler.mojo), asserting all 12 metadata entries and 32 vocabulary tokens persist through `Q4_0` quantization.
+- **Verification:** Tested in [`tests/test_vocab_sampler.mojo:test_full_metadata_quantization`](../tests/test_vocab_sampler.mojo), asserting all 12 metadata entries and 32 vocabulary tokens persist through `Q4_0` quantization.
 
 ### Key Objectives Achieved
 1. **Metadata Serialization**:
@@ -78,7 +78,7 @@ Enable external non-Mojo binaries, Python bindings (`llama-cpp-python`), Rust cr
 
 ### Status & Verification
 - **Status:** **Completed ✓**
-- **Implementation:** Created [`src/llamojo/c_api.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/c_api.mojo) providing native `@export` C-ABI functions with explicit `abi("C")` calling conventions:
+- **Implementation:** Created [`src/llamojo/c_api.mojo`](../src/llamojo/c_api.mojo) providing native `@export` C-ABI functions with explicit `abi("C")` calling conventions:
   - Backend & system lifecycle: `llama_backend_init`, `llama_backend_free`, `llama_numa_init`, `llama_time_us`, `llama_max_devices`, `llama_supports_mmap`, `llama_supports_mlock`, `llama_supports_gpu_offload`.
   - Parameters: `llama_model_default_params`, `llama_context_default_params`, `llama_model_quantize_default_params`.
   - Model & inspection: `llama_load_model_from_file`, `llama_model_load_from_file`, `llama_free_model`, `llama_model_free`, `llama_model_n_vocab`, `llama_model_n_embd`, `llama_model_n_layer`, `llama_model_n_head`, `llama_model_n_head_kv`, `llama_model_n_ctx_train`, `llama_model_n_params`, `llama_model_size`, `llama_model_desc`.
@@ -88,8 +88,8 @@ Enable external non-Mojo binaries, Python bindings (`llama-cpp-python`), Rust cr
   - Vocab & Tokenizer: `llama_model_get_vocab`, `llama_tokenize`, `llama_token_to_piece`, `llama_detokenize`, `llama_vocab_bos`, `llama_vocab_eos`, `llama_vocab_eot`, `llama_vocab_is_eog`, `llama_vocab_n_tokens`.
   - Sampler: `llama_sampler_chain_default_params`, `llama_sampler_chain_init`, `llama_sampler_chain_add`, `llama_sampler_init_top_k`, `llama_sampler_init_top_p`, `llama_sampler_init_min_p`, `llama_sampler_init_temp`, `llama_sampler_init_penalties`, `llama_sampler_init_greedy`, `llama_sampler_init_dist`, `llama_sampler_accept`, `llama_sampler_apply`, `llama_sampler_sample`, `llama_sampler_free`.
   - Quantizer: `llama_model_quantize`.
-- **Shared Library Binary:** Built [`build/libllama.so`](file:///mnt/c/Documents/Mojo/llamojo/build/libllama.so) (447 KB) via `mojo build --emit shared-lib`.
-- **Foreign Language Integration Verification:** Verified with a pure C test program ([`tests/test_c_abi.c`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_c_abi.c)) compiled with `gcc` and dynamically linked with `-lllama -Wl,-rpath,build`. Verified backend initialization, time queries, device capabilities, and greedy sampler creation over raw pointers. Included in [`run-tests.sh`](file:///mnt/c/Documents/Mojo/llamojo/run-tests.sh).
+- **Shared Library Binary:** Built [`build/libllama.so`](../build/libllama.so) (447 KB) via `mojo build --emit shared-lib`.
+- **Foreign Language Integration Verification:** Verified with a pure C test program ([`tests/test_c_abi.c`](../tests/test_c_abi.c)) compiled with `gcc` and dynamically linked with `-lllama -Wl,-rpath,build`. Verified backend initialization, time queries, device capabilities, and greedy sampler creation over raw pointers. Included in [`run-tests.sh`](../run-tests.sh).
 
 ### Key Objectives Achieved
 1. **Native `@export` Functions**:
@@ -119,7 +119,7 @@ While BPE covers LLaMA, Mistral, and Qwen, models such as Gemma 1 and T5 utilize
   - SentencePiece whitespace marker prefixing (` `, `\xe2\x96\x81`) and fallback to `<0xXX>` byte tokens or `<unk>`.
   - Unified tokenization dispatcher: `tokenize_text(text: String, add_bos: Bool)` routing to BPE or SPM based on detected model vocabulary type.
   - Added C-ABI exported endpoints: `llama_vocab_type` and `llama_vocab_get_score`.
-- **Verification:** Tested in [`tests/test_vocab_sampler.mojo:test_spm_unigram_tokenizer`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_vocab_sampler.mojo), validating Viterbi segmentation, whitespace prepending, log-probability selection, and byte fallback `<0x61>`.
+- **Verification:** Tested in [`tests/test_vocab_sampler.mojo:test_spm_unigram_tokenizer`](../tests/test_vocab_sampler.mojo), validating Viterbi segmentation, whitespace prepending, log-probability selection, and byte fallback `<0x61>`.
 
 ### Key Objectives Achieved
 1. **Unigram Graph Model**:
@@ -150,9 +150,9 @@ Provide runtime ingestion of Low-Rank Adaptation (LoRA) checkpoint files (`.gguf
   - Integrated `llama_adapter_lora_apply` into `src/llamojo/llama.mojo` for dynamically updating base weights (`token_embd.weight`, `output.weight`, and per-layer attention/FFN projections).
   - Exported standard C-ABI functions in `src/llamojo/c_api.mojo`: `llama_lora_adapter_init`, `llama_lora_adapter_set`, `llama_lora_adapter_free`, and `llama_adapter_lora_apply`.
 - **Verification:**
-  - Unit tested in [`tests/test_lora.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_lora.mojo), verifying synthetic adapter generation, Delta W numerical accuracy, and online weight mutation on loaded models.
-  - Verified C-ABI lifecycle in [`tests/test_c_abi.c`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_c_abi.c).
-  - Included in [`run-tests.sh`](file:///mnt/c/Documents/Mojo/llamojo/run-tests.sh).
+  - Unit tested in [`tests/test_lora.mojo`](../tests/test_lora.mojo), verifying synthetic adapter generation, Delta W numerical accuracy, and online weight mutation on loaded models.
+  - Verified C-ABI lifecycle in [`tests/test_c_abi.c`](../tests/test_c_abi.c).
+  - Included in [`run-tests.sh`](../run-tests.sh).
 
 ### Key Objectives Achieved
 1. **Adapter Loading**:
@@ -182,9 +182,9 @@ Upgrade the current `llama_sampler_init_grammar` stub into a production LR(1) pu
   - Integrated full grammar lifecycle into `src/llamojo/sampler.mojo` (`llama_sampler_init_grammar`, `_apply_grammar`, and `llama_sampler_accept` state accumulation).
   - Exported standard C-ABI functions in `src/llamojo/c_api.mojo`: `llama_grammar_init`, `llama_grammar_free`, and `llama_sampler_init_grammar`.
 - **Verification:**
-  - Unit tested in [`tests/test_grammar.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_grammar.mojo), asserting GBNF parsing, prefix validity, logit bitmasking (masking illegal closing braces), and greedy token selection under JSON constraints.
-  - Verified C-ABI lifecycle in [`tests/test_c_abi.c`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_c_abi.c).
-  - Included in [`run-tests.sh`](file:///mnt/c/Documents/Mojo/llamojo/run-tests.sh).
+  - Unit tested in [`tests/test_grammar.mojo`](../tests/test_grammar.mojo), asserting GBNF parsing, prefix validity, logit bitmasking (masking illegal closing braces), and greedy token selection under JSON constraints.
+  - Verified C-ABI lifecycle in [`tests/test_c_abi.c`](../tests/test_c_abi.c).
+  - Included in [`run-tests.sh`](../run-tests.sh).
 
 ### Key Objectives Achieved
 1. **GBNF Grammar Parser**:
@@ -213,8 +213,8 @@ Wire sparse routing and dynamic expert dispatch into `llama_decode` to enable hi
   - Implemented `forward_moe_ffn`: schedules selective FFN execution over only the active experts, evaluating fused Gate/Up SwiGLU (`matmul_quant_fused[2]`) and Down projection, scaling expert outputs by gating weights and accumulating directly into the residual stream.
   - Updated `LayerWeights` and `llama_decode` in `src/llamojo/backend/models.mojo` and `src/llamojo/llama.mojo` to automatically detect and ingest MoE router weights and per-expert tensor arrays (`ffn_gate.{e}.weight`, `ffn_up.{e}.weight`, `ffn_down.{e}.weight`).
 - **Verification:**
-  - Unit tested in [`tests/test_moe.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_moe.mojo), validating router dot products, softmax normalization, top-k selection ordering, and a full autoregressive transformer decode step with active MoE routing.
-  - Tested across all test suites via [`run-tests.sh`](file:///mnt/c/Documents/Mojo/llamojo/run-tests.sh).
+  - Unit tested in [`tests/test_moe.mojo`](../tests/test_moe.mojo), validating router dot products, softmax normalization, top-k selection ordering, and a full autoregressive transformer decode step with active MoE routing.
+  - Tested across all test suites via [`run-tests.sh`](../run-tests.sh).
 
 ### Key Objectives Achieved
 1. **Router Gating**:
@@ -237,7 +237,7 @@ Extract maximal floating-point and integer compute performance on modern multi-c
 ### Status & Verification
 - **Status:** **Completed ✓**
 - **Implementation:**
-  - Created [`src/llamojo/backend/micro_arch.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/micro_arch.mojo):
+  - Created [`src/llamojo/backend/micro_arch.mojo`](../src/llamojo/backend/micro_arch.mojo):
     - `gemv_quant_tiled`: Multi-threaded cache-tiled matrix-vector multiplication with `L2_BLOCK_SIZE = 256` column blocking to keep active row blocks and quantized activations strictly resident in CPU L1/L2 cache lines.
     - `dot_q8_0_vnni`: High-efficiency SIMD dot-product kernel processing int8 pairs with F32 scale accumulation, modeling `vpdpbusd` integer dot-product pipelines.
     - `dot_bf16_vec`: Vectorized bfloat16 dot product with 16-element SIMD register unrolling and F32 accumulation.
@@ -245,10 +245,10 @@ Extract maximal floating-point and integer compute performance on modern multi-c
     - `numa_is_available`, `numa_node_count`, `numa_pin_thread`: Pure POSIX NUMA awareness querying `/sys/devices/system/node` and binding threads to cores via `sched_setaffinity` syscalls.
   - Exported standard C-ABI functions in `src/llamojo/c_api.mojo`: `llama_numa_is_available`, `llama_numa_node_count`, and `llama_numa_pin_thread`.
 - **Verification:**
-  - Unit tested in [`tests/test_micro_arch.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_micro_arch.mojo), verifying numerical parity of cache-tiled GEMV against untiled reference kernels, BF16 vector dot products, CPU FlashAttention online softmax against standard dense softmax, and NUMA core pinning.
-  - Verified C-ABI lifecycle in [`tests/test_c_abi.c`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_c_abi.c).
-  - Clean precompilation in [`build/llamojo.mojoc`](file:///mnt/c/Documents/Mojo/llamojo/build/llamojo.mojoc) and shared library build [`build/libllama.so`](file:///mnt/c/Documents/Mojo/llamojo/build/libllama.so).
-  - All test suites passing cleanly via [`run-tests.sh`](file:///mnt/c/Documents/Mojo/llamojo/run-tests.sh).
+  - Unit tested in [`tests/test_micro_arch.mojo`](../tests/test_micro_arch.mojo), verifying numerical parity of cache-tiled GEMV against untiled reference kernels, BF16 vector dot products, CPU FlashAttention online softmax against standard dense softmax, and NUMA core pinning.
+  - Verified C-ABI lifecycle in [`tests/test_c_abi.c`](../tests/test_c_abi.c).
+  - Clean precompilation in [`build/llamojo.mojoc`](../build/llamojo.mojoc) and shared library build [`build/libllama.so`](../build/libllama.so).
+  - All test suites passing cleanly via [`run-tests.sh`](../run-tests.sh).
 
 ### Key Objectives Achieved
 1. **L1/L2/L3 Cache Tiled GEMM/GEMV**:

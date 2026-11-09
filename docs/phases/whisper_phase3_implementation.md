@@ -34,7 +34,7 @@ Phase 3 of the Whisper ASR integration into `llamojo` implements the **Dual Mode
 
 ## 3. Verification Results
 
-Verified in [`tests/test_whisper_phase3.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_whisper_phase3.mojo) against `/mnt/c/Documents/Programming/whisper.cpp/ggml-base.en.bin` ($147.96\text{ MB}$):
+Verified in [`tests/test_whisper_phase3.mojo`](../../tests/test_whisper_phase3.mojo) against `/mnt/c/Documents/Programming/whisper.cpp/ggml-base.en.bin` ($147.96\text{ MB}$):
 - **Hyperparameters**: Verified `n_vocab = 51864`, `n_audio_ctx = 1500`, `n_audio_state = 512`, `n_audio_head = 8`, `n_audio_layer = 6`, `n_text_ctx = 448`, `n_text_layer = 6`, `n_mels = 80`, `ftype = 1` (`F16`).
 - **Zero-Copy Tensor Binding**: All **245 tensors** (`15 + 15*6 + 24*6`) bound directly into the POSIX `mmap64` region with zero heap duplication.
 - **Vocabulary & Timestamps**: Verified all $51,864$ tokens including `<|endoftext|>` (`50256`), `[_SOT_]` (`50257`), and `[_BEG_]` (`50363`), plus multilingual offset shifting for $n_{\text{vocab}} = 51,865$.

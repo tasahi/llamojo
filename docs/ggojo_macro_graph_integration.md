@@ -45,7 +45,7 @@ This document details the completed implementation of **Gap 5 (Build & Packaging
 ## 2. Gap 5: Build & Packaging Dependency
 
 - **Compiler Include Resolution**:
-  In [`tools/build_shared_lib.sh`](file:///mnt/c/Documents/Mojo/llamojo/tools/build_shared_lib.sh), the include search path was updated to include `$GGOJO_ROOT/src`:
+  In [`tools/build_shared_lib.sh`](../tools/build_shared_lib.sh), the include search path was updated to include `$GGOJO_ROOT/src`:
   ```bash
   mojo build \
       --shared \
@@ -62,9 +62,9 @@ This document details the completed implementation of **Gap 5 (Build & Packaging
 ## 3. Gap 1: Backend Execution Delegation
 
 - **Parameter Configuration**:
-  In [`src/llamojo/types.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/types.mojo), added `use_macro_graph: Bool` to `llama_context_params`.
+  In [`src/llamojo/types.mojo`](../src/llamojo/types.mojo), added `use_macro_graph: Bool` to `llama_context_params`.
 - **Graph Assembly via Zero-Copy Bridge**:
-  In [`src/llamojo/llama.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/llama.mojo), when `use_macro_graph` is enabled on `llama_context`:
+  In [`src/llamojo/llama.mojo`](../src/llamojo/llama.mojo), when `use_macro_graph` is enabled on `llama_context`:
   1. A linear arena `GojoContext` (32MB) is allocated.
   2. For every layer in the model configuration, the weights are mapped into non-owning `GojoTensor` views using `wrap_llamojo_buffer_1d` and `wrap_llamojo_buffer_2d`.
   3. A `TransformerBlockNode` is constructed for each layer and registered sequentially into `GojoGraph`.

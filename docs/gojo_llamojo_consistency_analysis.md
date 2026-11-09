@@ -10,7 +10,7 @@ timestamp: 2026-11-05T00:00:00Z
 # Consistency Analysis: `ggojo` (GGML Reimplementation) vs. `llamojo`
 
 ## Executive Summary
-This document audits the consistency between the proposed **`ggojo`** architecture ([`/mnt/c/Documents/Mojo/ggojo/docs/ggml_mojo_reimplementation_study.md`](file:///mnt/c/Documents/Mojo/ggojo/docs/ggml_mojo_reimplementation_study.md)) and the existing **`llamojo`** codebase.
+This document audits the consistency between the proposed **`ggojo`** architecture ([`/mnt/c/Documents/Mojo/ggojo/docs/ggml_mojo_reimplementation_study.md`](./ggml_mojo_reimplementation_study.md)) and the existing **`llamojo`** codebase.
 
 **Overall Verdict: 100% Consistent and Complementary.**
 The `ggojo` design directly builds upon the foundations of `llamojo`. It takes the proven, production-verified primitives in `llamojo` (GGUF parsing, C-ABI quantization block layouts, and vectorized AVX2 SIMD compute) and generalizes them into a modular **Macro-Block Graph Engine** supporting both inference and end-to-end training.
@@ -33,7 +33,7 @@ The `ggojo` design directly builds upon the foundations of `llamojo`. It takes t
 ## 2. Deep Dive: Key Synergies & Shared Foundations
 
 ### 2.1 Wire & Type Layout Consistency
-In `llamojo`, [`src/llamojo/types.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/types.mojo) defines the exact numerical byte-alignments of GGML quantization types:
+In `llamojo`, [`src/llamojo/types.mojo`](../src/llamojo/types.mojo) defines the exact numerical byte-alignments of GGML quantization types:
 ```mojo
 # From llamojo/src/llamojo/types.mojo:
 alias GGML_TYPE_F32  = 0
@@ -78,7 +78,7 @@ In the upstream C++ ecosystem:
 - `ggml.h` defines low-level tensors, memory arenas, and graph evaluation (`ggml_init`, `ggml_new_tensor`, `ggml_graph_compute`).
 - `llama.h` defines the high-level LLM runtime, tokenizer, context, and samplers (`llama_model_load_from_file`, `llama_decode`, `llama_sampler_*`).
 
-`llamojo` already implements the high-level **`llama.h`** interface via [`src/llamojo/c_api.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/c_api.mojo).
+`llamojo` already implements the high-level **`llama.h`** interface via [`src/llamojo/c_api.mojo`](../src/llamojo/c_api.mojo).
 `ggojo` implements the low-level **`ggml.h`** interface via its proposed `c_abi.mojo`.
 
 They fit together cleanly:
