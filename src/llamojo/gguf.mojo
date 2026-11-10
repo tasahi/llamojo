@@ -25,6 +25,7 @@ from .types import (
     ggml_type_size_in_bytes,
     ggml_type_name,
     ModelConfig,
+    llama_rope_scaling_type,
     null_ptr,
 )
 from .backend.threadpool import Matrix, BufferPtrFloat32
@@ -355,6 +356,25 @@ struct GGUFContext(Movable):
         cfg.norm_eps = self.get_float(arch + ".attention.layer_norm_rms_epsilon", 1e-5)
         cfg.n_experts = self.get_int(arch + ".expert_count", 0)
         cfg.n_experts_used = self.get_int(arch + ".expert_used_count", 0)
+
+        # Sliding window attention (e.g. Mistral/Ministral, Gemma 2/4)
+        var sw_val = self.get_int(arch + ".attention.sliding_window", 0)
+        if sw_val > 0:
+            cfg.sliding_window = sw_val
+
+        # RoPE scaling parameters (Linear, YaRN, etc.)
+        var rope_type_str = self.get_string(arch + ".rope.scaling.type", "")
+        if rope_type_str == "yarn":
+            cfg.rope_scaling_type = llama_rope_scaling_type.LLAMA_ROPE_SCALING_TYPE_YARN
+        elif rope_type_str == "linear":
+            cfg.rope_scaling_type = llama_rope_scaling_type.LLAMA_ROPE_SCALING_TYPE_LINEAR
+        elif rope_type_str == "none":
+            cfg.rope_scaling_type = llama_rope_scaling_type.LLAMA_ROPE_SCALING_TYPE_NONE
+
+        cfg.rope_orig_ctx_len = self.get_int(arch + ".rope.scaling.original_context_length", 0)
+        cfg.yarn_beta_fast = self.get_float(arch + ".rope.scaling.yarn_beta_fast", 32.0)
+        cfg.yarn_beta_slow = self.get_float(arch + ".rope.scaling.yarn_beta_slow", 1.0)
+        cfg.yarn_attn_factor = self.get_float(arch + ".rope.scaling.yarn_attn_factor", 1.0)
 
         # Gemma 4 specific architectural metadata
         if arch == "gemma4":

@@ -350,6 +350,13 @@ struct ModelConfig(ImplicitlyCopyable, Copyable, Movable):
     var n_experts_used: Int      # {arch}.expert_used_count (0 for dense)
     var quant_type: UInt32       # Primary weight GGMLType
 
+    # Rotary Position Embedding & YaRN configuration
+    var rope_scaling_type: Int32 # llama_rope_scaling_type (0: None, 1: Linear, 2: YaRN)
+    var rope_orig_ctx_len: Int   # {arch}.rope.scaling.original_context_length
+    var yarn_beta_fast: Float32  # {arch}.rope.scaling.yarn_beta_fast
+    var yarn_beta_slow: Float32  # {arch}.rope.scaling.yarn_beta_slow
+    var yarn_attn_factor: Float32# {arch}.rope.scaling.yarn_attn_factor
+
     # Gemma 4 specific architectural metadata
     var shared_kv_layers: Int    # Number of upper layers that reuse KV cache (e.g. 20)
     var sliding_window: Int      # Sliding window attention size (e.g. 512)
@@ -377,6 +384,12 @@ struct ModelConfig(ImplicitlyCopyable, Copyable, Movable):
         self.n_experts = 0
         self.n_experts_used = 0
         self.quant_type = GGMLType.F32
+
+        self.rope_scaling_type = 0
+        self.rope_orig_ctx_len = 0
+        self.yarn_beta_fast = 32.0
+        self.yarn_beta_slow = 1.0
+        self.yarn_attn_factor = 1.0
 
         self.shared_kv_layers = 0
         self.sliding_window = 0

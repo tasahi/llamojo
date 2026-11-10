@@ -18,7 +18,7 @@ from std.memory import Pointer
 from std.collections import Span
 from std.memory.alloc import unsafe_alloc
 
-from .types import llama_token, null_ptr
+from .types import llama_token, null_ptr, GGUFValueType
 from .gguf import GGUFContext
 from .vocab_gpt2 import get_gpt2_byte_table, split_gpt2_chunks, tokenize_gpt2_bpe
 from .vocab_gemma import (
@@ -106,7 +106,13 @@ struct llama_vocab(Movable):
 
         var score_opt = gguf.metadata.find("tokenizer.ggml.scores")
         if score_opt:
-            self.scores = score_opt.value().float_arr.copy()
+            if score_opt.value().vtype == GGUFValueType.ARRAY and len(score_opt.value().float_arr) > 0:
+                self.scores = score_opt.value().float_arr.copy()
+            elif score_opt.value().vtype == GGUFValueType.ARRAY and len(score_opt.value().int_arr) > 0:
+                # Some GGUF exporters encode scores as Int32/Int64 integer arrays
+                var i_arr = score_opt.value().int_arr.copy()
+                for i in range(len(i_arr)):
+                    self.scores.append(Float32(i_arr[i]))
 
         var type_opt = gguf.metadata.find("tokenizer.ggml.token_type")
         if type_opt:
