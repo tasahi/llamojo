@@ -255,6 +255,7 @@ def forward_layer_dense(
         max_ctx,
         h0,
         h1,
+        sliding_window=cfg.sliding_window,
     )
     llama_barrier(sh)
 

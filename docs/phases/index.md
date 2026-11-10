@@ -31,7 +31,8 @@ entries:
   - whisper_phase5_implementation.md
   - phase1_ministral3_implementation_report.md
   - phase2_ministral3_implementation_report.md
-tags: [llamojo, phases, implementation-phases, gemma4, acceleration, simd, python-c-abi, whisper, ministral-3b, yarn-rope]
+  - phase3_ministral3_implementation_report.md
+tags: [llamojo, phases, implementation-phases, gemma4, acceleration, simd, python-c-abi, whisper, ministral-3b, yarn-rope, swa]
 timestamp: 2026-11-05T00:00:00Z
 ---
 
@@ -114,6 +115,7 @@ Integrating Mistral AI's edge-optimized Ministral 3 3B architecture (GQA, 256k-c
 | [**Ministral 3 3B Feasibility & Implementation Plan**](../ministral_3b_feasibility_and_implementation_plan.md) | `concept` | Active | Architectural gap analysis, technical feasibility study, and phased roadmap for text-only and future Pixtral multimodal extensions. |
 | [**Ministral 3 3B Support: Phase 1**](./phase1_ministral3_implementation_report.md) | `reference` | Completed | GGUF metadata auto-detection (`mistral3`), `ModelConfig` RoPE attributes, and integer-encoded token score array ingestion. |
 | [**Ministral 3 3B Support: Phase 2**](./phase2_ministral3_implementation_report.md) | `reference` | Completed | YaRN RoPE mathematical formulas, correction dimension boundaries, linear ramp blending, and execution dispatch in `forward_layer_dense`. |
+| [**Ministral 3 3B Support: Phase 3**](./phase3_ministral3_implementation_report.md) | `reference` | Completed | Sliding Window Attention (SWA) wiring in `forward_layer_dense`, tied embedding head evaluation, and multi-token end-to-end decoding. |
 
 ---
 
