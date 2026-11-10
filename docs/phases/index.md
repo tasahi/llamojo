@@ -29,7 +29,9 @@ entries:
   - whisper_phase3_implementation.md
   - whisper_phase4_implementation.md
   - whisper_phase5_implementation.md
-tags: [llamojo, phases, implementation-phases, gemma4, acceleration, simd, python-c-abi, whisper]
+  - phase1_ministral3_implementation_report.md
+  - phase2_ministral3_implementation_report.md
+tags: [llamojo, phases, implementation-phases, gemma4, acceleration, simd, python-c-abi, whisper, ministral-3b, yarn-rope]
 timestamp: 2026-11-05T00:00:00Z
 ---
 
@@ -101,6 +103,17 @@ Integrating OpenAI Whisper Encoder-Decoder speech recognition models natively in
 | [**Whisper Support: Phase 3**](./whisper_phase3_implementation.md) | `reference` | Completed | Dual Model Loader: zero-copy `mmap64` support for legacy `whisper.cpp` `.bin` (`0x67676d6c`) and GGUF v2/v3 models, plus dynamic special/timestamp vocab. |
 | [**Whisper Support: Phase 4**](./whisper_phase4_implementation.md) | `reference` | Completed | Audio Encoder, static Cross-Attention KV precomputation (`kv_cross`), and Autoregressive Text Decoder (`whisper_encode`, `whisper_decode`). |
 | [**Whisper Support: Phase 5**](./whisper_phase5_implementation.md) | `reference` | Completed | Paired timestamp logit rules (`ApplyTimestampRules`), 30s seek loop (`whisper_full`), C-ABI exports, and Python `Whisper` / `LlamojoForSpeechSeq2Seq`. |
+
+---
+
+## ⚡ 6. Ministral 3 3B Architecture Series
+Integrating Mistral AI's edge-optimized Ministral 3 3B architecture (GQA, 256k-context YaRN RoPE, sliding-window attention, and tied embeddings).
+
+| Document | Type | Status | Technical Focus |
+|---|---|---|---|
+| [**Ministral 3 3B Feasibility & Implementation Plan**](../ministral_3b_feasibility_and_implementation_plan.md) | `concept` | Active | Architectural gap analysis, technical feasibility study, and phased roadmap for text-only and future Pixtral multimodal extensions. |
+| [**Ministral 3 3B Support: Phase 1**](./phase1_ministral3_implementation_report.md) | `reference` | Completed | GGUF metadata auto-detection (`mistral3`), `ModelConfig` RoPE attributes, and integer-encoded token score array ingestion. |
+| [**Ministral 3 3B Support: Phase 2**](./phase2_ministral3_implementation_report.md) | `reference` | Completed | YaRN RoPE mathematical formulas, correction dimension boundaries, linear ramp blending, and execution dispatch in `forward_layer_dense`. |
 
 ---
 

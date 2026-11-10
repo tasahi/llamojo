@@ -30,6 +30,7 @@ from .kernels_norm_rope import (
     fused_silu_mul,
     apply_rope_norm,
     apply_rope_neox,
+    apply_rope_yarn,
 )
 from .kernels_quant import (
     BytePtr,
@@ -207,7 +208,24 @@ def forward_layer_dense(
 
     # 3. RoPE: apply in-place to worker's heads (worker 0 applies for all if 1 worker)
     if wid == 0:
-        if cfg.rope_type == 0:
+        if cfg.rope_scaling_type == 2: # YaRN
+            apply_rope_yarn(
+                q,
+                k_buf,
+                n_heads,
+                n_kv_heads,
+                head_dim,
+                pos,
+                cfg.rope_theta,
+                cfg.rope_freq_scale,
+                cfg.rope_orig_ctx_len,
+                cfg.yarn_beta_fast,
+                cfg.yarn_beta_slow,
+                Float32(1.0),
+                cfg.yarn_attn_factor,
+                cfg.rope_type != 0,
+            )
+        elif cfg.rope_type == 0:
             apply_rope_norm(q, k_buf, n_heads, n_kv_heads, head_dim, pos, cfg.rope_theta, cfg.rope_freq_scale)
         else:
             apply_rope_neox(q, k_buf, n_heads, n_kv_heads, head_dim, pos, cfg.rope_theta, cfg.rope_freq_scale)

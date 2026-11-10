@@ -12,7 +12,8 @@ Provides zero-allocation fused passes for:
 """
 
 from std.memory import Pointer
-from std.math import sqrt, exp, pow, cos, sin, tanh
+from std.memory.alloc import unsafe_alloc
+from std.math import sqrt, exp, pow, cos, sin, tanh, log, floor, ceil
 from .isa import SIMD_WIDTH, F32xW
 
 comptime FloatPtr = Pointer[Float32, MutUntrackedOrigin]
@@ -499,3 +500,134 @@ def apply_rope_neox(
             var k1 = k_head[unsafe_offset=i + half_dim]
             k_head[unsafe_offset=i] = k0 * cos_a - k1 * sin_a
             k_head[unsafe_offset=i + half_dim] = k0 * sin_a + k1 * cos_a
+
+
+# ─── YaRN (Yet another RoPE extensioN) Implementation ────────────────────────
+
+@always_inline
+def rope_yarn_corr_factor(n_dims: Int, n_ctx_orig: Int, n_rot: Float32, base: Float32) -> Float32:
+    """ Compute YaRN correction dimension factor from base wavelength."""
+    var pi_2 = Float32(6.283185307179586)
+    var num = log(Float32(n_ctx_orig) / (n_rot * pi_2))
+    var den = Float32(2.0) * log(base)
+    return Float32(n_dims) * (num / den)
+
+@always_inline
+def rope_yarn_corr_dims(
+        n_dims: Int,
+        n_ctx_orig: Int,
+        freq_base: Float32,
+        beta_fast: Float32,
+        beta_slow: Float32,
+        mut dims_low: Float32,
+        mut dims_high: Float32,
+    ):
+    """ Compute lower and upper correction dimension bounds [dims_low, dims_high]."""
+    var f_low = rope_yarn_corr_factor(n_dims, n_ctx_orig, beta_fast, freq_base)
+    var f_high = rope_yarn_corr_factor(n_dims, n_ctx_orig, beta_slow, freq_base)
+    dims_low = max(Float32(0.0), floor(f_low))
+    dims_high = min(Float32(n_dims - 1), ceil(f_high))
+
+@always_inline
+def rope_yarn_ramp(low: Float32, high: Float32, i0: Int) -> Float32:
+    """ Compute smooth linear ramp between interpolation and extrapolation."""
+    var span = max(Float32(0.001), high - low)
+    var y = (Float32(i0) - low) / span
+    var clamped = min(Float32(1.0), max(Float32(0.0), y))
+    return Float32(1.0) - clamped
+
+@always_inline
+def apply_rope_yarn(
+    q: FloatPtr,
+    k: FloatPtr,
+    n_heads: Int,
+    n_kv_heads: Int,
+    head_dim: Int,
+    pos: Int,
+    rope_theta: Float32 = 10000.0,
+    rope_freq_scale: Float32 = 1.0,
+    n_ctx_orig: Int = 16384,
+    beta_fast: Float32 = 32.0,
+    beta_slow: Float32 = 1.0,
+    ext_factor: Float32 = 1.0,
+    attn_factor: Float32 = 1.0,
+    is_neox: Bool = False,
+):
+    """ Apply YaRN (Yet another RoPE extensioN) position embedding with frequency blending.
+
+    Partitions the head_dim spectrum into:
+    - High frequency (extrapolated / unmodified)
+    - Low frequency (interpolated by rope_freq_scale)
+    - Mid frequency (smooth ramp blend via beta_fast and beta_slow)
+    Scales sin/cos components by mscale = attn_factor * (1.0 + 0.1 * log(scale)).
+    """
+    var inv_theta = Float32(1.0) / rope_theta
+    var half_dim = head_dim // 2
+
+    # Compute correction dimension bounds
+    var corr_low: Float32 = 0.0
+    var corr_high: Float32 = 0.0
+    var orig_ctx = n_ctx_orig if n_ctx_orig > 0 else 16384
+    rope_yarn_corr_dims(head_dim, orig_ctx, rope_theta, beta_fast, beta_slow, corr_low, corr_high)
+
+    # Compute attention magnitude scaling factor
+    var mscale = attn_factor
+    var scale = Float32(1.0) / rope_freq_scale
+    if scale > 1.0:
+        mscale *= Float32(1.0) + Float32(0.1) * log(scale)
+
+    # Precompute cos and sin tables for all half_dim pairs
+    var cos_arr = unsafe_alloc[Float32](half_dim)
+    var sin_arr = unsafe_alloc[Float32](half_dim)
+
+    for i in range(half_dim):
+        var dim_idx = i * 2
+        var freq_extrap = pow(inv_theta, Float32(dim_idx) / Float32(head_dim))
+        var freq_interp = freq_extrap * rope_freq_scale
+        var freq = freq_interp
+
+        if ext_factor != 0.0:
+            var ramp_mix = rope_yarn_ramp(corr_low, corr_high, dim_idx) * ext_factor
+            freq = freq_interp * (Float32(1.0) - ramp_mix) + freq_extrap * ramp_mix
+
+        var angle = Float32(pos) * freq
+        cos_arr[unsafe_offset=i] = cos(angle) * mscale
+        sin_arr[unsafe_offset=i] = sin(angle) * mscale
+
+    # Apply to Query heads
+    for h in range(n_heads):
+        var q_head = q.unsafe_offset(h * head_dim)
+        for i in range(half_dim):
+            var cos_a = cos_arr[unsafe_offset=i]
+            var sin_a = sin_arr[unsafe_offset=i]
+            if is_neox:
+                var q0 = q_head[unsafe_offset=i]
+                var q1 = q_head[unsafe_offset=i + half_dim]
+                q_head[unsafe_offset=i] = q0 * cos_a - q1 * sin_a
+                q_head[unsafe_offset=i + half_dim] = q0 * sin_a + q1 * cos_a
+            else:
+                var q0 = q_head[unsafe_offset=i * 2]
+                var q1 = q_head[unsafe_offset=i * 2 + 1]
+                q_head[unsafe_offset=i * 2] = q0 * cos_a - q1 * sin_a
+                q_head[unsafe_offset=i * 2 + 1] = q0 * sin_a + q1 * cos_a
+
+    # Apply to Key heads
+    for h in range(n_kv_heads):
+        var k_head = k.unsafe_offset(h * head_dim)
+        for i in range(half_dim):
+            var cos_a = cos_arr[unsafe_offset=i]
+            var sin_a = sin_arr[unsafe_offset=i]
+            if is_neox:
+                var k0 = k_head[unsafe_offset=i]
+                var k1 = k_head[unsafe_offset=i + half_dim]
+                k_head[unsafe_offset=i] = k0 * cos_a - k1 * sin_a
+                k_head[unsafe_offset=i + half_dim] = k0 * sin_a + k1 * cos_a
+            else:
+                var k0 = k_head[unsafe_offset=i * 2]
+                var k1 = k_head[unsafe_offset=i * 2 + 1]
+                k_head[unsafe_offset=i * 2] = k0 * cos_a - k1 * sin_a
+                k_head[unsafe_offset=i * 2 + 1] = k0 * sin_a + k1 * cos_a
+
+    cos_arr.unsafe_free()
+    sin_arr.unsafe_free()
+

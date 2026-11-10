@@ -53,6 +53,10 @@ from .kernels_norm_rope import (
     rope_head,
     apply_rope_norm,
     apply_rope_neox,
+    apply_rope_yarn,
+    rope_yarn_corr_factor,
+    rope_yarn_corr_dims,
+    rope_yarn_ramp,
 )
 from .kernels_conv import (
     conv1d_f32,

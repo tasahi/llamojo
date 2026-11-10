@@ -2,9 +2,9 @@
 type: concept
 title: "Feasibility Study & Implementation Roadmap: Ministral 3 3B in llamojo"
 description: "Comprehensive architectural feasibility study, gap analysis, and phased implementation roadmap for executing the Ministral 3 3B model in llamojo, including text-only processing and future vision/multimodal extensions."
-status: planned
+status: in-progress
 tags: [mistral, ministral-3b, swa, yarn-rope, multimodal, pixtral, vision-encoder, gguf, llamojo]
-timestamp: 2026-11-10T19:44:00Z
+timestamp: 2026-11-10T20:30:00Z
 ---
 
 # Feasibility Study & Implementation Roadmap: Ministral 3 3B in `llamojo`
@@ -27,16 +27,16 @@ Ministral 3 3B is a compact, high-performance edge model featuring:
 
 | Architectural Feature | Ministral 3 3B Specification | `llamojo` Current Capabilities | Compatibility Status |
 | :--- | :--- | :--- | :--- |
-| **GGUF Identifier** | `general.architecture = "mistral3"` / `"ministral3"` | Recognizes `"llama"`, `"gemma"`, `"gemma4"`, etc. | ⚠️ **Needs Mapping**: Add `"mistral3"` to metadata parser in `gguf.mojo`. |
+| **GGUF Identifier** | `general.architecture = "mistral3"` / `"ministral3"` | Recognizes `"llama"`, `"gemma"`, `"gemma4"`, and generic `{arch}.*` metadata | ✅ **Completed (Phase 1)**: Auto-parses `{arch}` keys, sliding window, and YaRN scaling. |
 | **Layers / Hidden Dim** | 26 layers, $d_{\text{model}} = 3072$ | Arbitrary layer counts and dims supported | ✅ **Fully Compatible** |
 | **MLP / Intermediate Dim** | SwiGLU, $d_{\text{ffn}} = 9216$ | SwiGLU (`fused_silu_mul`) + parallel GEMM | ✅ **Fully Compatible** |
 | **Attention Mechanism** | GQA (32 Query heads, 8 KV heads, $d_{\text{head}} = 128$) | GQA decode (`gqa_decode`) and prefill | ✅ **Fully Compatible** |
 | **Normalization** | RMSNorm ($\epsilon = 10^{-5}$) | SIMD-vectorized `rms_norm` with dynamic $\epsilon$ | ✅ **Fully Compatible** |
 | **Tied Word Embeddings** | `tie_word_embeddings = true` (or explicit output weight) | Supported via `cfg.is_tied_embeddings` | ✅ **Fully Compatible** |
-| **Positional Embeddings** | **YaRN RoPE** (factor=16.0, beta_fast=32, beta_slow=1, $\theta = 10^6$) | Standard RoPE & linear scale (`rope_freq_scale`) | ⚠️ **Missing Operator**: YaRN frequency blending missing for full 256k context. |
-| **Sliding Window (SWA)** | Layer-dependent or global SWA (optional depending on quant) | SWA kernel exists in `kernels_attn.mojo`, but unwired in `models.mojo` | ⚠️ **Integration Needed**: Wire `sliding_window` parameter to decoder layer. |
-| **Tokenizer** | 131,072 tokens (Mistral Tekken / Byte-level BPE) | GPT-2 BPE, SentencePiece, Gemma tokenizers | ⚠️ **Validation Needed**: Ensure GGUF BPE table loader handles 131k entries cleanly. |
-| **Multimodal Vision** | Pixtral Vision Encoder (14x14 patches, 24 layers, $d=1024$) | No vision encoder (Audio/Whisper exists) | ❌ **Deferred**: Vision frontend and projector required for multimodal. |
+| **Positional Embeddings** | **YaRN RoPE** (factor=16.0, beta_fast=32, beta_slow=1, $\theta = 10^6$) | Full YaRN interpolation/extrapolation kernel | ✅ **Completed (Phase 2)**: `apply_rope_yarn` implemented and dispatched in `models.mojo`. |
+| **Sliding Window (SWA)** | Layer-dependent or global SWA (optional depending on quant) | SWA kernel exists in `kernels_attn.mojo`, parsed in `gguf.mojo` | ⚠️ **Integration Needed (Phase 3)**: Wire `sliding_window` parameter to decoder layer. |
+| **Tokenizer** | 131,072 tokens (Mistral Tekken / Byte-level BPE) | GPT-2 BPE, SentencePiece, Gemma tokenizers | ✅ **Completed (Phase 1)**: Robust support for integer-encoded token scores. |
+| **Multimodal Vision** | Pixtral Vision Encoder (14x14 patches, 24 layers, $d=1024$) | No vision encoder (Audio/Whisper exists) | ❌ **Deferred**: Vision frontend and projector required for multimodal (Phase 4). |
 
 ---
 
@@ -92,25 +92,25 @@ Ministral 3 utilizes a 131,072 vocabulary size based on Tekken (byte-level BPE w
 
 ## 4. Recommended Implementation Phases (Text-Only Processing)
 
-### Phase 1: GGUF Ingestion & Architecture Configuration
+### Phase 1: GGUF Ingestion & Architecture Configuration (Status: Completed)
 * **Goal**: Enable `llamojo` to load Ministral 3 GGUF files into `ModelConfig` and allocate memory correctly.
 * **Tasks**:
-  1. Add `mistral3` and `ministral3` to `gguf.mojo` recognized architecture list.
+  1. Add `{arch}` generic key resolution and support `mistral3` / `ministral3` in `gguf.mojo`.
   2. Parse YaRN parameters (`beta_fast`, `beta_slow`, `rope_scaling_factor`, `orig_ctx_len`) and populate `ModelConfig`.
-  3. Validate tensor name mappings (`blk.i.attn_q.weight`, `blk.i.attn_k.weight`, `blk.i.attn_v.weight`, `blk.i.attn_output.weight`, `blk.i.ffn_gate.weight`, `blk.i.ffn_up.weight`, `blk.i.ffn_down.weight`, `output.weight` or tied `token_embd.weight`).
-  4. Write a unit test `test_ministral3_gguf_metadata.mojo` using synthetic or sampled GGUF headers.
+  3. Support integer-encoded `tokenizer.ggml.scores` in `src/llamojo/vocab.mojo`.
+  4. Unit test metadata and model config population via `tests/test_ministral3_phase1.mojo`.
+  5. *Documented in detail*: [`docs/phases/phase1_ministral3_implementation_report.md`](./phases/phase1_ministral3_implementation_report.md).
 
-### Phase 2: YaRN RoPE Kernel Implementation
+### Phase 2: YaRN RoPE Kernel Implementation (Status: Completed)
 * **Goal**: Accurate position encodings for sequences from 1 token to 256k tokens.
 * **Tasks**:
-  1. Implement `apply_rope_yarn` in `src/llamojo/backend/kernels_norm_rope.mojo`:
-     - Calculate wavelength per head dimension index: $\lambda = 2\pi / \theta_i$.
-     - Compute smooth interpolation weight $\gamma(r) \in [0, 1]$ based on $(\text{low\_cutoff}, \text{high\_cutoff})$.
-     - Apply temperature dampening factor to attention scores or query/key scaling.
-  2. Integrate `apply_rope_yarn` into `models.mojo:forward_layer_dense` when `cfg.rope_scaling_type == YARN`.
-  3. Unit test against PyTorch reference outputs for varying sequence positions.
+  1. Implement `rope_yarn_corr_factor`, `rope_yarn_corr_dims`, and `rope_yarn_ramp` in `src/llamojo/backend/kernels_norm_rope.mojo`.
+  2. Implement `apply_rope_yarn` with frequency blending, magnitude scaling ($m_{\text{scale}}$), and both Interleaved and NeoX layouts.
+  3. Dispatch `apply_rope_yarn` in `src/llamojo/backend/models.mojo:forward_layer_dense` when `cfg.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_YARN`.
+  4. Validate boundary conditions, ramp blending, and multi-head numerical stability via `tests/test_ministral3_phase2.mojo`.
+  5. *Documented in detail*: [`docs/phases/phase2_ministral3_implementation_report.md`](./phases/phase2_ministral3_implementation_report.md).
 
-### Phase 3: Attention Window Wiring & Pipeline Validation
+### Phase 3: Attention Window Wiring & Pipeline Validation (Status: Planned)
 * **Goal**: Complete end-to-end text generation on CPU.
 * **Tasks**:
   1. Connect `cfg.sliding_window` parameter to `gqa_decode` and `gqa_prefill` inside `models.mojo`.
