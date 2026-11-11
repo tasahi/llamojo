@@ -10,7 +10,7 @@ into `LlamaPoolShared` and `LlamaWorkerPool` for arbitrary GGUF models.
 from std.atomic import Atomic
 from std.memory import Pointer, unsafe_memset_zero
 from std.memory.alloc import unsafe_alloc
-from std.sys.info import num_performance_cores
+from std.sys.info import num_performance_cores, num_logical_cores
 from max.algorithm import parallelize
 
 # Direct sublibrary import from /mnt/c/Documents/Mojo/llama2.mojo
@@ -84,9 +84,9 @@ struct LlamaWorkerPool(Movable):
     var initialized: Bool
 
     def __init__(out self, workers: Int = 0, dim: Int = 4096):
-        var hw_cores = num_performance_cores()
+        var hw_cores = max(1, num_logical_cores())
         var actual_workers = workers if workers > 0 else hw_cores
-        self.workers = max(1, min(actual_workers, hw_cores))
+        self.workers = max(1, actual_workers)
         self.sh = unsafe_alloc[LlamaPoolShared](1)
         self.sh.unsafe_write(LlamaPoolShared(self.workers, dim))
         self.initialized = True

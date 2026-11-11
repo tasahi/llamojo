@@ -17,7 +17,7 @@ Features:
 from std.memory import Pointer, bitcast
 from std.memory.alloc import unsafe_alloc
 from std.utils import StaticTuple
-from std.sys.info import simd_width_of, num_performance_cores
+from std.sys.info import simd_width_of, num_performance_cores, num_logical_cores
 from std.ffi import external_call
 from max.algorithm import parallelize
 
@@ -1087,7 +1087,7 @@ def gemv_gelu_biased(
     var bpr = (cols // blk_sz) * type_sz
     var has_bias = Int(bias) != 0
 
-    var n_workers = workers if workers > 0 else num_performance_cores()
+    var n_workers = workers if workers > 0 else max(1, num_logical_cores())
     if n_workers <= 1 or rows < 512:
         for r in range(rows):
             var w_row = w.unsafe_offset(r * bpr)
@@ -1128,7 +1128,7 @@ def gemv_quant(
     var type_sz = Int(ggml_type_size(dtype))
     var bpr = (cols // blk_sz) * type_sz
 
-    var n_workers = workers if workers > 0 else num_performance_cores()
+    var n_workers = workers if workers > 0 else max(1, num_logical_cores())
     if dtype == GGMLType.Q6_K and (cols % 256 == 0):
         var q8_bytes = (cols // 256) * 292
         var q8_buf = unsafe_alloc[UInt8](q8_bytes)
@@ -1241,7 +1241,7 @@ def gemv_gate_up_fused(
     var type_sz_u = Int(ggml_type_size(dtype_up))
     var bpr_u = (dim // blk_sz_u) * type_sz_u
 
-    var n_workers = workers if workers > 0 else num_performance_cores()
+    var n_workers = workers if workers > 0 else max(1, num_logical_cores())
     if n_workers <= 1 or hidden_dim < 512:
         for r in range(hidden_dim):
             var w_g_row = w_gate.unsafe_offset(r * bpr_g)

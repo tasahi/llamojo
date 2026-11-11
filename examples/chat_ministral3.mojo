@@ -76,19 +76,17 @@ def run_chat_turn(
 
     print("Ingesting prompt (", n_tokens, " tokens): ", end="", flush=True)
 
-    # Ingest prompt tokens into KV cache
+    # Ingest prompt tokens into KV cache using batched decode
     var t_prompt_start = perf_counter_ns()
+    var batch = llama_batch_init(n_tokens, embd=0, n_seq_max=1)
     for i in range(Int(n_tokens)):
-        var tok = prompt_tokens_buf[unsafe_offset=i]
-        var b = llama_batch_init(1, embd=0, n_seq_max=1)
-        b.token[unsafe_offset=0] = tok
-        b.pos[unsafe_offset=0] = Int32(cur_pos + i)
-        b.logits[unsafe_offset=0] = 1 if i == Int(n_tokens) - 1 else 0
-        _ = llama_decode(ctx, b)
-        llama_batch_free(b)
-        print(".", end="", flush=True)
+        batch.token[unsafe_offset=i] = prompt_tokens_buf[unsafe_offset=i]
+        batch.pos[unsafe_offset=i] = Int32(cur_pos + i)
+        batch.logits[unsafe_offset=i] = 1 if i == Int(n_tokens) - 1 else 0
+    _ = llama_decode(ctx, batch)
+    llama_batch_free(batch)
+    print(".......... done.")
     var t_prompt_end = perf_counter_ns()
-    print(" done.")
 
     prompt_tokens_buf.unsafe_free()
 
@@ -113,7 +111,7 @@ def run_chat_turn(
     var t_gen_start = perf_counter_ns()
 
     for step in range(max_tokens):
-        var logits = llama_get_logits_ith(ctx, 0)
+        var logits = llama_get_logits_ith(ctx, Int32(n_tokens - 1 if step == 0 else 0))
         if Int(logits) == 0:
             break
 

@@ -116,6 +116,8 @@ Integrating Mistral AI's edge-optimized Ministral 3 3B architecture (GQA, 256k-c
 | [**Ministral 3 3B Support: Phase 1**](./phase1_ministral3_implementation_report.md) | `reference` | Completed | GGUF metadata auto-detection (`mistral3`), `ModelConfig` RoPE attributes, and integer-encoded token score array ingestion. |
 | [**Ministral 3 3B Support: Phase 2**](./phase2_ministral3_implementation_report.md) | `reference` | Completed | YaRN RoPE mathematical formulas, correction dimension boundaries, linear ramp blending, and execution dispatch in `forward_layer_dense`. |
 | [**Ministral 3 3B Support: Phase 3**](./phase3_ministral3_implementation_report.md) | `reference` | Completed | Sliding Window Attention (SWA) wiring in `forward_layer_dense`, tied embedding head evaluation, and multi-token end-to-end decoding. |
+| [**Ministral 3 3B Acceleration: Phase 1**](./phase1_ministral3_acceleration.md) | `reference` | Completed | Hardware core topology resolution, filesystem I/O optimization, and AOT compilation. |
+| [**Ministral 3 3B Acceleration: Phase 2**](./phase2_ministral3_acceleration.md) | `reference` | Completed | Unclamped threadpool workers, AVX2 2-row tiled `gemv_quant` LM head, and batched prompt prefill. |
 
 ---
 

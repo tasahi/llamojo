@@ -14,7 +14,7 @@ Phases 1-3 complete implementation:
 from std.collections import List
 from std.memory import Pointer, unsafe_memset_zero, unsafe_memcpy
 from std.memory.alloc import unsafe_alloc
-from std.sys.info import num_performance_cores
+from std.sys.info import num_performance_cores, num_logical_cores
 from std import time
 from max.algorithm import parallelize
 
@@ -61,6 +61,7 @@ from .backend import (
     apply_logit_softcapping,
     rms_norm,
     dot_quant_row,
+    gemv_quant,
     dequantize_row,
     f16_to_f32,
 )
@@ -339,7 +340,7 @@ struct llama_context(Movable):
         )
 
         # Initialize Persistent Spin-Barrier Worker Pool
-        var n_threads = Int(params.n_threads) if params.n_threads > 0 else num_performance_cores()
+        var n_threads = Int(params.n_threads) if params.n_threads > 0 else max(1, num_logical_cores())
         self.pool = LlamaWorkerPool(workers=n_threads, dim=self.dim)
 
         # Allocate contiguous activation workspace buffers
@@ -450,7 +451,7 @@ def llama_model_default_params() -> llama_model_params:
     )
 
 def llama_context_default_params() -> llama_context_params:
-    var hw_threads = Int32(max(1, num_performance_cores()))
+    var hw_threads = Int32(max(1, num_logical_cores()))
     return llama_context_params(
         n_ctx=512,
         n_batch=2048,
@@ -667,21 +668,15 @@ def llama_decode(ctx: llama_context_p, batch: llama_batch) -> Int32:
                 rms_norm(xbp, ctx[].x, model[].output_norm, dim, cfg.norm_eps)
 
                 var out_logits = ctx[].logits.unsafe_offset(tok_idx * vocab_size)
-                var blk_sz_out = Int(ggml_block_size(model[].output_weight_type))
-                var type_sz_out = Int(ggml_type_size(model[].output_weight_type))
-                var bpr_out = (dim // blk_sz_out) * type_sz_out
-
-                def gemma4_logits_worker(wid: Int) {imm}:
-                    var v0 = chunk_start(vocab_size, wid, workers)
-                    var v1 = chunk_end(vocab_size, wid, workers)
-                    for r in range(v0, v1):
-                        var w_row = model[].output_weight.unsafe_offset(r * bpr_out)
-                        out_logits[unsafe_offset=r] = dot_quant_row(model[].output_weight_type, w_row, xbp, dim)
-
-                if workers == 1:
-                    gemma4_logits_worker(0)
-                else:
-                    parallelize(gemma4_logits_worker, workers, workers)
+                gemv_quant(
+                    out_logits,
+                    model[].output_weight,
+                    model[].output_weight_type,
+                    xbp,
+                    vocab_size,
+                    dim,
+                    workers,
+                )
 
                 # Gemma 4 Logit Softcapping
                 if cfg.logit_softcap > 0.0:
@@ -736,21 +731,15 @@ def llama_decode(ctx: llama_context_p, batch: llama_batch) -> Int32:
                 rms_norm(xbp, ctx[].x, model[].output_norm, dim, cfg.norm_eps)
 
                 var out_logits = ctx[].logits.unsafe_offset(tok_idx * vocab_size)
-                var blk_sz_out = Int(ggml_block_size(model[].output_weight_type))
-                var type_sz_out = Int(ggml_type_size(model[].output_weight_type))
-                var bpr_out = (dim // blk_sz_out) * type_sz_out
-
-                def logits_worker(wid: Int) {imm}:
-                    var v0 = chunk_start(vocab_size, wid, workers)
-                    var v1 = chunk_end(vocab_size, wid, workers)
-                    for r in range(v0, v1):
-                        var w_row = model[].output_weight.unsafe_offset(r * bpr_out)
-                        out_logits[unsafe_offset=r] = dot_quant_row(model[].output_weight_type, w_row, xbp, dim)
-
-                if workers == 1:
-                    logits_worker(0)
-                else:
-                    parallelize(logits_worker, workers, workers)
+                gemv_quant(
+                    out_logits,
+                    model[].output_weight,
+                    model[].output_weight_type,
+                    xbp,
+                    vocab_size,
+                    dim,
+                    workers,
+                )
 
                 if cfg.logit_softcap > 0.0:
                     apply_logit_softcapping(out_logits, vocab_size, cfg.logit_softcap)
