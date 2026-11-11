@@ -47,6 +47,8 @@ struct LlamaPoolShared:
     var bar_gen: Atomic[Int]         # Spin barrier: sense-reversing generation
     var xbp: BufferPtrFloat32        # Per-worker private scratch buffer (workers * xbp_dim)
     var xbp_dim: Int
+    var q8_act: Pointer[UInt8, MutUntrackedOrigin] # Shared Q8_K quantized activation buffer
+    var q8_dim: Int
 
     def __init__(out self, workers: Int, dim: Int):
         self.workers = max(1, workers)
@@ -55,6 +57,10 @@ struct LlamaPoolShared:
         self.xbp_dim = max(1, dim)
         self.xbp = unsafe_alloc[Float32](self.workers * self.xbp_dim)
         unsafe_memset_zero(self.xbp, self.workers * self.xbp_dim)
+        var max_cols = max(16384, dim)
+        self.q8_dim = (max_cols // 256) * 292
+        self.q8_act = unsafe_alloc[UInt8](self.q8_dim)
+        unsafe_memset_zero(self.q8_act, self.q8_dim)
 
 comptime LlamaPoolSharedPtr = Pointer[LlamaPoolShared, MutUntrackedOrigin]
 
@@ -114,6 +120,8 @@ struct LlamaWorkerPool(Movable):
         """Release heap allocations owned by this worker pool."""
         if self.initialized:
             self.sh[].xbp.unsafe_free()
+            if Int(self.sh[].q8_act) != 0:
+                self.sh[].q8_act.unsafe_free()
             self.sh.unsafe_deinit_pointee()
             self.sh.unsafe_free()
             self.initialized = False

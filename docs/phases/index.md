@@ -118,6 +118,7 @@ Integrating Mistral AI's edge-optimized Ministral 3 3B architecture (GQA, 256k-c
 | [**Ministral 3 3B Support: Phase 3**](./phase3_ministral3_implementation_report.md) | `reference` | Completed | Sliding Window Attention (SWA) wiring in `forward_layer_dense`, tied embedding head evaluation, and multi-token end-to-end decoding. |
 | [**Ministral 3 3B Acceleration: Phase 1**](./phase1_ministral3_acceleration.md) | `reference` | Completed | Hardware core topology resolution, filesystem I/O optimization, and AOT compilation. |
 | [**Ministral 3 3B Acceleration: Phase 2**](./phase2_ministral3_acceleration.md) | `reference` | Completed | Unclamped threadpool workers, AVX2 2-row tiled `gemv_quant` LM head, and batched prompt prefill. |
+| [**Ministral 3 3B Acceleration: Phase 3**](./phase3_ministral3_acceleration.md) | `reference` | Completed | Hardware AVX2 integer-domain dot products (`Q8_K` activations), multi-matrix horizontal projection fusion, and 2-row register tiling across transformer layers. |
 
 ---
 

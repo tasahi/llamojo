@@ -36,6 +36,11 @@ from .kernels_quant import (
     BytePtr,
     FloatPtr,
     dot_quant_row,
+    dot_q4_k_q8_k_row,
+    dot_q4_k_q8_k_2rows,
+    dot_q6_k_q8_k_row,
+    dot_q6_k_q8_k_2rows,
+    quantize_row_q8_k,
     matmul_quant_fused,
 )
 from .kernels_attn import gqa_decode
@@ -171,33 +176,39 @@ def forward_layer_dense(
     else:
         unsafe_memcpy(dest=xbp, src=x, count=dim)
 
+    # Pre-quantize attention normalized input xbp to Q8_K once for all QKV projections
+    if wid == 0 and Int(sh[].q8_act) != 0 and (dim % 256 == 0):
+        quantize_row_q8_k(xbp, sh[].q8_act, dim)
+    llama_barrier(sh)
+
     # 2. QKV Projections: fused or parallel row dot
     var q_ptr = q
     var k_ptr = k_buf
     var v_ptr = v_buf
+    var q8_act_ptr = sh[].q8_act
 
     if Int(lw.wq) != 0:
         if q_dim == dim and kv_dim == dim and lw.dtype_q == lw.dtype_k and lw.dtype_q == lw.dtype_v:
             var c_qkv = StaticTuple[FloatPtr, 3](q_ptr, k_ptr, v_ptr)
             var w_qkv = StaticTuple[BytePtr, 3](lw.wq, lw.wk, lw.wv)
-            matmul_quant_fused[3](lw.dtype_q, c_qkv, xbp, w_qkv, d0, d1, dim)
+            matmul_quant_fused[3](lw.dtype_q, c_qkv, xbp, w_qkv, d0, d1, dim, q8_act_ptr)
         else:
             var c_q = StaticTuple[FloatPtr, 1](q_ptr)
             var w_q = StaticTuple[BytePtr, 1](lw.wq)
-            matmul_quant_fused[1](lw.dtype_q, c_q, xbp, w_q, q0, q1, dim)
+            matmul_quant_fused[1](lw.dtype_q, c_q, xbp, w_q, q0, q1, dim, q8_act_ptr)
 
             if lw.dtype_k == lw.dtype_v:
                 var c_kv = StaticTuple[FloatPtr, 2](k_ptr, v_ptr)
                 var w_kv = StaticTuple[BytePtr, 2](lw.wk, lw.wv)
-                matmul_quant_fused[2](lw.dtype_k, c_kv, xbp, w_kv, kv0, kv1, dim)
+                matmul_quant_fused[2](lw.dtype_k, c_kv, xbp, w_kv, kv0, kv1, dim, q8_act_ptr)
             else:
                 var c_k = StaticTuple[FloatPtr, 1](k_ptr)
                 var w_k = StaticTuple[BytePtr, 1](lw.wk)
-                matmul_quant_fused[1](lw.dtype_k, c_k, xbp, w_k, kv0, kv1, dim)
+                matmul_quant_fused[1](lw.dtype_k, c_k, xbp, w_k, kv0, kv1, dim, q8_act_ptr)
 
                 var c_v = StaticTuple[FloatPtr, 1](v_ptr)
                 var w_v = StaticTuple[BytePtr, 1](lw.wv)
-                matmul_quant_fused[1](lw.dtype_v, c_v, xbp, w_v, kv0, kv1, dim)
+                matmul_quant_fused[1](lw.dtype_v, c_v, xbp, w_v, kv0, kv1, dim, q8_act_ptr)
     else:
         # Pass-through for partial synthetic models
         if wid == 0:
@@ -267,13 +278,47 @@ def forward_layer_dense(
 
     # 6. Output Projection + Residual Addition
     if Int(lw.wo) != 0:
+        if wid == 0 and Int(sh[].q8_act) != 0 and (q_dim % 256 == 0):
+            quantize_row_q8_k(xb, sh[].q8_act, q_dim)
+        llama_barrier(sh)
+
         var blk_sz_wo = Int(ggml_block_size(lw.dtype_o))
         var type_sz_wo = Int(ggml_type_size(lw.dtype_o))
         var bpr_wo = (q_dim // blk_sz_wo) * type_sz_wo
-        for r in range(d0, d1):
-            var w_row = lw.wo.unsafe_offset(r * bpr_wo)
-            var res_wo = dot_quant_row(lw.dtype_o, w_row, xb, q_dim)
-            x[unsafe_offset=r] += res_wo
+
+        if Int(sh[].q8_act) != 0 and lw.dtype_o == GGMLType.Q4_K and (q_dim % 256 == 0):
+            var r = d0
+            while r + 1 < d1:
+                var w_row0 = lw.wo.unsafe_offset(r * bpr_wo)
+                var w_row1 = lw.wo.unsafe_offset((r + 1) * bpr_wo)
+                var res0: Float32 = 0.0
+                var res1: Float32 = 0.0
+                dot_q4_k_q8_k_2rows(w_row0, w_row1, sh[].q8_act, q_dim, res0, res1)
+                x[unsafe_offset=r] += res0
+                x[unsafe_offset=r + 1] += res1
+                r += 2
+            if r < d1:
+                var w_row = lw.wo.unsafe_offset(r * bpr_wo)
+                x[unsafe_offset=r] += dot_q4_k_q8_k_row(w_row, sh[].q8_act, q_dim)
+        elif Int(sh[].q8_act) != 0 and lw.dtype_o == GGMLType.Q6_K and (q_dim % 256 == 0):
+            var r = d0
+            while r + 1 < d1:
+                var w_row0 = lw.wo.unsafe_offset(r * bpr_wo)
+                var w_row1 = lw.wo.unsafe_offset((r + 1) * bpr_wo)
+                var res0: Float32 = 0.0
+                var res1: Float32 = 0.0
+                dot_q6_k_q8_k_2rows(w_row0, w_row1, sh[].q8_act, q_dim, res0, res1)
+                x[unsafe_offset=r] += res0
+                x[unsafe_offset=r + 1] += res1
+                r += 2
+            if r < d1:
+                var w_row = lw.wo.unsafe_offset(r * bpr_wo)
+                x[unsafe_offset=r] += dot_q6_k_q8_k_row(w_row, sh[].q8_act, q_dim)
+        else:
+            for r in range(d0, d1):
+                var w_row = lw.wo.unsafe_offset(r * bpr_wo)
+                var res_wo = dot_quant_row(lw.dtype_o, w_row, xb, q_dim)
+                x[unsafe_offset=r] += res_wo
     else:
         for r in range(d0, d1):
             x[unsafe_offset=r] += xb[unsafe_offset=r]
@@ -284,6 +329,11 @@ def forward_layer_dense(
         rms_norm(xbp, x, lw.ffn_norm, dim, cfg.norm_eps)
     else:
         unsafe_memcpy(dest=xbp, src=x, count=dim)
+
+    # Pre-quantize FFN normalized input xbp to Q8_K once for Gate/Up projections
+    if wid == 0 and Int(sh[].q8_act) != 0 and (dim % 256 == 0):
+        quantize_row_q8_k(xbp, sh[].q8_act, dim)
+    llama_barrier(sh)
 
     # 8. FFN SwiGLU / MoE execution
     if lw.is_moe and lw.n_experts > 0 and Int(lw.w_router) != 0:
@@ -296,18 +346,19 @@ def forward_layer_dense(
             moe.experts.append(MoEExpertWeights(wg, wu, wd, lw.dtype_gate))
         forward_moe_ffn(x, xbp, hb, hb2, moe, dim, hidden_dim, wid, sh)
     elif Int(lw.w_gate) != 0 and Int(lw.w_up) != 0:
+        var q8_act_ptr = sh[].q8_act
         if lw.dtype_gate == lw.dtype_up:
             var c_gate_up = StaticTuple[FloatPtr, 2](hb, hb2)
             var w_gate_up = StaticTuple[BytePtr, 2](lw.w_gate, lw.w_up)
-            matmul_quant_fused[2](lw.dtype_gate, c_gate_up, xbp, w_gate_up, f0, f1, dim)
+            matmul_quant_fused[2](lw.dtype_gate, c_gate_up, xbp, w_gate_up, f0, f1, dim, q8_act_ptr)
         else:
             var c_g = StaticTuple[FloatPtr, 1](hb)
             var w_g = StaticTuple[BytePtr, 1](lw.w_gate)
-            matmul_quant_fused[1](lw.dtype_gate, c_g, xbp, w_g, f0, f1, dim)
+            matmul_quant_fused[1](lw.dtype_gate, c_g, xbp, w_g, f0, f1, dim, q8_act_ptr)
 
             var c_u = StaticTuple[FloatPtr, 1](hb2)
             var w_u = StaticTuple[BytePtr, 1](lw.w_up)
-            matmul_quant_fused[1](lw.dtype_up, c_u, xbp, w_u, f0, f1, dim)
+            matmul_quant_fused[1](lw.dtype_up, c_u, xbp, w_u, f0, f1, dim, q8_act_ptr)
 
         # Apply SiLU to worker's slice of hidden dimension: hb = silu(hb) * hb2
         for i in range(f0, f1):
@@ -316,11 +367,45 @@ def forward_layer_dense(
 
         # 9. Down Projection + Residual Addition
         if Int(lw.w_down) != 0:
+            if wid == 0 and Int(sh[].q8_act) != 0 and (hidden_dim % 256 == 0):
+                quantize_row_q8_k(hb, sh[].q8_act, hidden_dim)
+            llama_barrier(sh)
+
             var blk_sz_down = Int(ggml_block_size(lw.dtype_down))
             var type_sz_down = Int(ggml_type_size(lw.dtype_down))
             var bpr_down = (hidden_dim // blk_sz_down) * type_sz_down
-            for r in range(d0, d1):
-                var w_row = lw.w_down.unsafe_offset(r * bpr_down)
-                var res_down = dot_quant_row(lw.dtype_down, w_row, hb, hidden_dim)
-                x[unsafe_offset=r] += res_down
+
+            if Int(sh[].q8_act) != 0 and lw.dtype_down == GGMLType.Q4_K and (hidden_dim % 256 == 0):
+                var r = d0
+                while r + 1 < d1:
+                    var w_row0 = lw.w_down.unsafe_offset(r * bpr_down)
+                    var w_row1 = lw.w_down.unsafe_offset((r + 1) * bpr_down)
+                    var res0: Float32 = 0.0
+                    var res1: Float32 = 0.0
+                    dot_q4_k_q8_k_2rows(w_row0, w_row1, sh[].q8_act, hidden_dim, res0, res1)
+                    x[unsafe_offset=r] += res0
+                    x[unsafe_offset=r + 1] += res1
+                    r += 2
+                if r < d1:
+                    var w_row = lw.w_down.unsafe_offset(r * bpr_down)
+                    x[unsafe_offset=r] += dot_q4_k_q8_k_row(w_row, sh[].q8_act, hidden_dim)
+            elif Int(sh[].q8_act) != 0 and lw.dtype_down == GGMLType.Q6_K and (hidden_dim % 256 == 0):
+                var r = d0
+                while r + 1 < d1:
+                    var w_row0 = lw.w_down.unsafe_offset(r * bpr_down)
+                    var w_row1 = lw.w_down.unsafe_offset((r + 1) * bpr_down)
+                    var res0: Float32 = 0.0
+                    var res1: Float32 = 0.0
+                    dot_q6_k_q8_k_2rows(w_row0, w_row1, sh[].q8_act, hidden_dim, res0, res1)
+                    x[unsafe_offset=r] += res0
+                    x[unsafe_offset=r + 1] += res1
+                    r += 2
+                if r < d1:
+                    var w_row = lw.w_down.unsafe_offset(r * bpr_down)
+                    x[unsafe_offset=r] += dot_q6_k_q8_k_row(w_row, sh[].q8_act, hidden_dim)
+            else:
+                for r in range(d0, d1):
+                    var w_row = lw.w_down.unsafe_offset(r * bpr_down)
+                    var res_down = dot_quant_row(lw.dtype_down, w_row, hb, hidden_dim)
+                    x[unsafe_offset=r] += res_down
         llama_barrier(sh)

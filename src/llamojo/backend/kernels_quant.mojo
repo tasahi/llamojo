@@ -29,7 +29,7 @@ from .isa import (
     load_f16_scale,
 )
 from .kernels_norm_rope import gelu
-from ..types import GGMLType, ggml_type_size, ggml_block_size
+from ..types import GGMLType, ggml_type_size, ggml_block_size, null_ptr
 
 comptime BytePtr = Pointer[UInt8, MutUntrackedOrigin]
 comptime FloatPtr = Pointer[Float32, MutUntrackedOrigin]
@@ -997,14 +997,43 @@ def matmul_quant_fused[ n: Int, ](
         row_start: Int,
         row_end: Int,
         nc: Int,
+        q8_buf: BytePtr = null_ptr[UInt8](),
     ):
     """ Fused multi-matrix projection across worker row range [row_start, row_end).\n    
     Shares input vector `x` loads across registers for `n` projections simultaneously.
-    Used for QKV (n=3) and SwiGLU Gate/Up (n=2).
+    If `q8_buf` is provided and dtype is Q4_K or Q6_K, dispatches hardware AVX2 pmadd dot products.
     """
     var blk_sz = Int(ggml_block_size(dtype))
     var type_sz = Int(ggml_type_size(dtype))
     var bytes_per_row = (nc // blk_sz) * type_sz
+
+    if Int(q8_buf) != 0 and dtype == GGMLType.Q4_K and (nc % 256 == 0):
+        var r = row_start
+        while r + 1 < row_end:
+            comptime for k in range(n):
+                var w_row0 = W[k].unsafe_offset(r * bytes_per_row)
+                var w_row1 = W[k].unsafe_offset((r + 1) * bytes_per_row)
+                dot_q4_k_q8_k_2rows(w_row0, w_row1, q8_buf, nc, C[k][unsafe_offset=r], C[k][unsafe_offset=r + 1])
+            r += 2
+        if r < row_end:
+            comptime for k in range(n):
+                var w_row = W[k].unsafe_offset(r * bytes_per_row)
+                C[k][unsafe_offset=r] = dot_q4_k_q8_k_row(w_row, q8_buf, nc)
+        return
+
+    if Int(q8_buf) != 0 and dtype == GGMLType.Q6_K and (nc % 256 == 0):
+        var r = row_start
+        while r + 1 < row_end:
+            comptime for k in range(n):
+                var w_row0 = W[k].unsafe_offset(r * bytes_per_row)
+                var w_row1 = W[k].unsafe_offset((r + 1) * bytes_per_row)
+                dot_q6_k_q8_k_2rows(w_row0, w_row1, q8_buf, nc, C[k][unsafe_offset=r], C[k][unsafe_offset=r + 1])
+            r += 2
+        if r < row_end:
+            comptime for k in range(n):
+                var w_row = W[k].unsafe_offset(r * bytes_per_row)
+                C[k][unsafe_offset=r] = dot_q6_k_q8_k_row(w_row, q8_buf, nc)
+        return
 
     for r in range(row_start, row_end):
         comptime for k in range(n):
