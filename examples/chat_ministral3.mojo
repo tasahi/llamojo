@@ -95,12 +95,12 @@ def run_chat_turn(
 
     print("\nMinistral 3: ", end="")
 
-    # Initialize sampling chain
+    # Initialize sampling chain (top_k=40 first to prune 131k candidates to 40, then temp & dist)
     var sparams = llama_sampler_chain_default_params()
     sparams.no_perf = True
     var smpl = llama_sampler_chain_init(sparams)
-    llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature))
     llama_sampler_chain_add(smpl, llama_sampler_init_top_k(40))
+    llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature))
     llama_sampler_chain_add(smpl, llama_sampler_init_top_p(Float32(0.9)))
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(42))
 

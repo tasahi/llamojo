@@ -20,13 +20,22 @@ comptime FloatPtr = Pointer[Float32, MutUntrackedOrigin]
 
 @always_inline
 def dot_vectors(a: FloatPtr, b: FloatPtr, n: Int) -> Float32:
-    """Compute dot product of two Float32 vectors of length `n`."""
-    var acc = F32xW(0.0)
+    """Compute dot product of two Float32 vectors of length `n` with 4x unrolling."""
+    var acc0 = SIMD[DType.float32, 8](0.0)
+    var acc1 = SIMD[DType.float32, 8](0.0)
+    var acc2 = SIMD[DType.float32, 8](0.0)
+    var acc3 = SIMD[DType.float32, 8](0.0)
     var i = 0
-    while i + SIMD_WIDTH <= n:
-        acc += a.unsafe_load[width=SIMD_WIDTH](i) * b.unsafe_load[width=SIMD_WIDTH](i)
-        i += SIMD_WIDTH
-    var total = acc.reduce_add()
+    while i + 32 <= n:
+        acc0 += a.unsafe_load[width=8](i + 0) * b.unsafe_load[width=8](i + 0)
+        acc1 += a.unsafe_load[width=8](i + 8) * b.unsafe_load[width=8](i + 8)
+        acc2 += a.unsafe_load[width=8](i + 16) * b.unsafe_load[width=8](i + 16)
+        acc3 += a.unsafe_load[width=8](i + 24) * b.unsafe_load[width=8](i + 24)
+        i += 32
+    while i + 8 <= n:
+        acc0 += a.unsafe_load[width=8](i) * b.unsafe_load[width=8](i)
+        i += 8
+    var total = (acc0 + acc1 + acc2 + acc3).reduce_add()
     while i < n:
         total += a[unsafe_offset=i] * b[unsafe_offset=i]
         i += 1
@@ -34,14 +43,18 @@ def dot_vectors(a: FloatPtr, b: FloatPtr, n: Int) -> Float32:
 
 @always_inline
 def axpy_vector(y: FloatPtr, x: FloatPtr, a: Float32, n: Int):
-    """Compute y[i] += a * x[i] for vectors of length `n`."""
-    var av = F32xW(a)
+    """Compute y[i] += a * x[i] for vectors of length `n` with 4x unrolling."""
+    var av = SIMD[DType.float32, 8](a)
     var i = 0
-    while i + SIMD_WIDTH <= n:
-        var yv = y.unsafe_load[width=SIMD_WIDTH](i)
-        var xv = x.unsafe_load[width=SIMD_WIDTH](i)
-        y.unsafe_store[width=SIMD_WIDTH](i, yv + av * xv)
-        i += SIMD_WIDTH
+    while i + 32 <= n:
+        y.unsafe_store[width=8](i + 0, y.unsafe_load[width=8](i + 0) + av * x.unsafe_load[width=8](i + 0))
+        y.unsafe_store[width=8](i + 8, y.unsafe_load[width=8](i + 8) + av * x.unsafe_load[width=8](i + 8))
+        y.unsafe_store[width=8](i + 16, y.unsafe_load[width=8](i + 16) + av * x.unsafe_load[width=8](i + 16))
+        y.unsafe_store[width=8](i + 24, y.unsafe_load[width=8](i + 24) + av * x.unsafe_load[width=8](i + 24))
+        i += 32
+    while i + 8 <= n:
+        y.unsafe_store[width=8](i, y.unsafe_load[width=8](i) + av * x.unsafe_load[width=8](i))
+        i += 8
     while i < n:
         y[unsafe_offset=i] += a * x[unsafe_offset=i]
         i += 1

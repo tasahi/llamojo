@@ -125,11 +125,12 @@ def _softmax_token_data(cur_p: Pointer[llama_token_data_array, MutUntrackedOrigi
     for i in range(n):
         data[unsafe_offset=i].p = data[unsafe_offset=i].p * inv_sum
 
-def _sort_token_data_descending(cur_p: Pointer[llama_token_data_array, MutUntrackedOrigin]):
-    """Sort candidates by logit/prob descending (in-place partial/full selection)."""
+def _sort_token_data_descending(cur_p: Pointer[llama_token_data_array, MutUntrackedOrigin], top_k: Int = -1):
+    """Sort candidates by logit/prob descending (in-place partial or full selection sort)."""
     var n = cur_p[].size
     var data = cur_p[].data
-    for i in range(n):
+    var max_i = n if top_k <= 0 or top_k > n else top_k
+    for i in range(max_i):
         var best_idx = i
         var best_val = data[unsafe_offset=i].logit
         for j in range(i + 1, n):
@@ -190,7 +191,7 @@ def _apply_top_k(smpl: llama_sampler_p, cur_p: Pointer[llama_token_data_array, M
     var n = cur_p[].size
     if k <= 0 or k >= n:
         return
-    _sort_token_data_descending(cur_p)
+    _sort_token_data_descending(cur_p, top_k=k)
     cur_p[].size = k
 
 def _apply_top_p(smpl: llama_sampler_p, cur_p: Pointer[llama_token_data_array, MutUntrackedOrigin]):

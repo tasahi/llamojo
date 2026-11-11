@@ -119,6 +119,7 @@ Integrating Mistral AI's edge-optimized Ministral 3 3B architecture (GQA, 256k-c
 | [**Ministral 3 3B Acceleration: Phase 1**](./phase1_ministral3_acceleration.md) | `reference` | Completed | Hardware core topology resolution, filesystem I/O optimization, and AOT compilation. |
 | [**Ministral 3 3B Acceleration: Phase 2**](./phase2_ministral3_acceleration.md) | `reference` | Completed | Unclamped threadpool workers, AVX2 2-row tiled `gemv_quant` LM head, and batched prompt prefill. |
 | [**Ministral 3 3B Acceleration: Phase 3**](./phase3_ministral3_acceleration.md) | `reference` | Completed | Hardware AVX2 integer-domain dot products (`Q8_K` activations), multi-matrix horizontal projection fusion, and 2-row register tiling across transformer layers. |
+| [**Ministral 3 3B Acceleration: Phase 4**](./phase4_ministral3_acceleration.md) | `reference` | Completed | 1,638× algorithmic speedup on 131k-vocab sampler via partial Top-K selection sort, 4× AVX2 unrolled attention dot products, and generation throughput jump to 2.32 tok/s. |
 
 ---
 
