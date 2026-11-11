@@ -120,6 +120,7 @@ Integrating Mistral AI's edge-optimized Ministral 3 3B architecture (GQA, 256k-c
 | [**Ministral 3 3B Acceleration: Phase 2**](./phase2_ministral3_acceleration.md) | `reference` | Completed | Unclamped threadpool workers, AVX2 2-row tiled `gemv_quant` LM head, and batched prompt prefill. |
 | [**Ministral 3 3B Acceleration: Phase 3**](./phase3_ministral3_acceleration.md) | `reference` | Completed | Hardware AVX2 integer-domain dot products (`Q8_K` activations), multi-matrix horizontal projection fusion, and 2-row register tiling across transformer layers. |
 | [**Ministral 3 3B Acceleration: Phase 4**](./phase4_ministral3_acceleration.md) | `reference` | Completed | 1,638× algorithmic speedup on 131k-vocab sampler via partial Top-K selection sort, 4× AVX2 unrolled attention dot products, and generation throughput jump to 2.32 tok/s. |
+| [**Ministral 3 3B Acceleration: Phase 5**](./phase5_ministral3_acceleration.md) | `reference` | Completed | 4-Row GEMV Register Tiling (`dot_q4_k_q8_k_4rows`, `dot_q6_k_q8_k_4rows`), 75% activation load reduction, 3.52 tok/s generation throughput surpassing `llama.cpp`. |
 
 ---
 

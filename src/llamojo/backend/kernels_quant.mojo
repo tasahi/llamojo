@@ -812,6 +812,199 @@ def dot_q4_k_q8_k_2rows(
     res1 = total1
 
 @always_inline
+def dot_q4_k_q8_k_4rows(
+        w0: BytePtr,
+        w1: BytePtr,
+        w2: BytePtr,
+        w3: BytePtr,
+        q8: BytePtr,
+        nc: Int,
+        mut res0: Float32,
+        mut res1: Float32,
+        mut res2: Float32,
+        mut res3: Float32,
+    ):
+    """ Tiled 4-row hardware-accelerated integer-domain SIMD dot product using AVX2 pmadd.ub.sw.
+    
+    Shares Q8_K activation vector loads across 4 quantized weight rows simultaneously in registers.
+    """
+    var bpr = nc // 256
+    var total0: Float32 = 0.0
+    var total1: Float32 = 0.0
+    var total2: Float32 = 0.0
+    var total3: Float32 = 0.0
+    var ones = SIMD[DType.int16, 16](1)
+
+    for blk in range(bpr):
+        var bo = blk * 144
+        var yo = blk * 292
+
+        var d_y = q8.unsafe_offset(yo).unsafe_bitcast[Float32]()[unsafe_offset=0]
+
+        var d0 = load_f16_scale(w0, bo) * d_y
+        var dm0 = load_f16_scale(w0, bo + 2) * d_y
+
+        var d1 = load_f16_scale(w1, bo) * d_y
+        var dm1 = load_f16_scale(w1, bo + 2) * d_y
+
+        var d2 = load_f16_scale(w2, bo) * d_y
+        var dm2 = load_f16_scale(w2, bo + 2) * d_y
+
+        var d3 = load_f16_scale(w3, bo) * d_y
+        var dm3 = load_f16_scale(w3, bo + 2) * d_y
+
+        var scales_ptr0 = w0.unsafe_offset(bo + 4)
+        var qs_w0 = w0.unsafe_offset(bo + 16)
+
+        var scales_ptr1 = w1.unsafe_offset(bo + 4)
+        var qs_w1 = w1.unsafe_offset(bo + 16)
+
+        var scales_ptr2 = w2.unsafe_offset(bo + 4)
+        var qs_w2 = w2.unsafe_offset(bo + 16)
+
+        var scales_ptr3 = w3.unsafe_offset(bo + 4)
+        var qs_w3 = w3.unsafe_offset(bo + 16)
+
+        var qs_y = q8.unsafe_offset(yo + 4)
+
+        var is_idx = 0
+        var q_off = 0
+        var sumi0: Float32 = 0.0
+        var sumi1: Float32 = 0.0
+        var sumi2: Float32 = 0.0
+        var sumi3: Float32 = 0.0
+
+        for s in range(0, 256, 64):
+            var sc1_0: UInt8 = 0; var sc2_0: UInt8 = 0
+            var m1_0: UInt8 = 0; var m2_0: UInt8 = 0
+            k4_scale(is_idx, scales_ptr0, sc1_0, m1_0)
+            k4_scale(is_idx + 1, scales_ptr0, sc2_0, m2_0)
+
+            var d1_0 = d0 * Float32(sc1_0)
+            var mm1_0 = dm0 * Float32(m1_0)
+            var d2_0 = d0 * Float32(sc2_0)
+            var mm2_0 = dm0 * Float32(m2_0)
+
+            var sc1_1: UInt8 = 0; var sc2_1: UInt8 = 0
+            var m1_1: UInt8 = 0; var m2_1: UInt8 = 0
+            k4_scale(is_idx, scales_ptr1, sc1_1, m1_1)
+            k4_scale(is_idx + 1, scales_ptr1, sc2_1, m2_1)
+
+            var d1_1 = d1 * Float32(sc1_1)
+            var mm1_1 = dm1 * Float32(m1_1)
+            var d2_1 = d1 * Float32(sc2_1)
+            var mm2_1 = dm1 * Float32(m2_1)
+
+            var sc1_2: UInt8 = 0; var sc2_2: UInt8 = 0
+            var m1_2: UInt8 = 0; var m2_2: UInt8 = 0
+            k4_scale(is_idx, scales_ptr2, sc1_2, m1_2)
+            k4_scale(is_idx + 1, scales_ptr2, sc2_2, m2_2)
+
+            var d1_2 = d2 * Float32(sc1_2)
+            var mm1_2 = dm2 * Float32(m1_2)
+            var d2_2 = d2 * Float32(sc2_2)
+            var mm2_2 = dm2 * Float32(m2_2)
+
+            var sc1_3: UInt8 = 0; var sc2_3: UInt8 = 0
+            var m1_3: UInt8 = 0; var m2_3: UInt8 = 0
+            k4_scale(is_idx, scales_ptr3, sc1_3, m1_3)
+            k4_scale(is_idx + 1, scales_ptr3, sc2_3, m2_3)
+
+            var d1_3 = d3 * Float32(sc1_3)
+            var mm1_3 = dm3 * Float32(m1_3)
+            var d2_3 = d3 * Float32(sc2_3)
+            var mm2_3 = dm3 * Float32(m2_3)
+
+            for g in range(2):
+                var j = g * 16
+
+                var y1_16 = qs_y.unsafe_load[width=16](s + j).cast[DType.int8]()
+                var y2_16 = qs_y.unsafe_load[width=16](s + 32 + j).cast[DType.int8]()
+
+                var y1 = y1_16.join(SIMD[DType.int8, 16](0))
+                var y2 = y2_16.join(SIMD[DType.int8, 16](0))
+                var sum_y1 = y1_16.cast[DType.int32]().reduce_add()
+                var sum_y2 = y2_16.cast[DType.int32]().reduce_add()
+
+                # Row 0
+                var b_v0 = qs_w0.unsafe_load[width=16](q_off + j)
+                var lo_16_0 = (b_v0 & UInt8(0x0F)).cast[DType.uint8]()
+                var hi_16_0 = (b_v0 >> UInt8(4)).cast[DType.uint8]()
+                var p16_1_0 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](lo_16_0.join(SIMD[DType.uint8, 16](0)), y1)
+                var p16_2_0 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](hi_16_0.join(SIMD[DType.uint8, 16](0)), y2)
+                var p32_1_0 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_1_0, ones)
+                var p32_2_0 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_2_0, ones)
+                var dot1_0 = p32_1_0.slice[4, offset=0]().reduce_add()
+                var dot2_0 = p32_2_0.slice[4, offset=0]().reduce_add()
+                sumi0 += d1_0 * Float32(dot1_0) - mm1_0 * Float32(sum_y1) + d2_0 * Float32(dot2_0) - mm2_0 * Float32(sum_y2)
+
+                # Row 1
+                var b_v1 = qs_w1.unsafe_load[width=16](q_off + j)
+                var lo_16_1 = (b_v1 & UInt8(0x0F)).cast[DType.uint8]()
+                var hi_16_1 = (b_v1 >> UInt8(4)).cast[DType.uint8]()
+                var p16_1_1 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](lo_16_1.join(SIMD[DType.uint8, 16](0)), y1)
+                var p16_2_1 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](hi_16_1.join(SIMD[DType.uint8, 16](0)), y2)
+                var p32_1_1 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_1_1, ones)
+                var p32_2_1 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_2_1, ones)
+                var dot1_1 = p32_1_1.slice[4, offset=0]().reduce_add()
+                var dot2_1 = p32_2_1.slice[4, offset=0]().reduce_add()
+                sumi1 += d1_1 * Float32(dot1_1) - mm1_1 * Float32(sum_y1) + d2_1 * Float32(dot2_1) - mm2_1 * Float32(sum_y2)
+
+                # Row 2
+                var b_v2 = qs_w2.unsafe_load[width=16](q_off + j)
+                var lo_16_2 = (b_v2 & UInt8(0x0F)).cast[DType.uint8]()
+                var hi_16_2 = (b_v2 >> UInt8(4)).cast[DType.uint8]()
+                var p16_1_2 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](lo_16_2.join(SIMD[DType.uint8, 16](0)), y1)
+                var p16_2_2 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](hi_16_2.join(SIMD[DType.uint8, 16](0)), y2)
+                var p32_1_2 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_1_2, ones)
+                var p32_2_2 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_2_2, ones)
+                var dot1_2 = p32_1_2.slice[4, offset=0]().reduce_add()
+                var dot2_2 = p32_2_2.slice[4, offset=0]().reduce_add()
+                sumi2 += d1_2 * Float32(dot1_2) - mm1_2 * Float32(sum_y1) + d2_2 * Float32(dot2_2) - mm2_2 * Float32(sum_y2)
+
+                # Row 3
+                var b_v3 = qs_w3.unsafe_load[width=16](q_off + j)
+                var lo_16_3 = (b_v3 & UInt8(0x0F)).cast[DType.uint8]()
+                var hi_16_3 = (b_v3 >> UInt8(4)).cast[DType.uint8]()
+                var p16_1_3 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](lo_16_3.join(SIMD[DType.uint8, 16](0)), y1)
+                var p16_2_3 = external_call["llvm.x86.avx2.pmadd.ub.sw", SIMD[DType.int16, 16]](hi_16_3.join(SIMD[DType.uint8, 16](0)), y2)
+                var p32_1_3 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_1_3, ones)
+                var p32_2_3 = external_call["llvm.x86.avx2.pmadd.wd", SIMD[DType.int32, 8]](p16_2_3, ones)
+                var dot1_3 = p32_1_3.slice[4, offset=0]().reduce_add()
+                var dot2_3 = p32_2_3.slice[4, offset=0]().reduce_add()
+                sumi3 += d1_3 * Float32(dot1_3) - mm1_3 * Float32(sum_y1) + d2_3 * Float32(dot2_3) - mm2_3 * Float32(sum_y2)
+
+            is_idx += 2
+            q_off += 32
+
+        total0 += sumi0
+        total1 += sumi1
+        total2 += sumi2
+        total3 += sumi3
+
+    res0 = total0
+    res1 = total1
+    res2 = total2
+    res3 = total3
+
+@always_inline
+def dot_q6_k_q8_k_4rows(
+        w0: BytePtr,
+        w1: BytePtr,
+        w2: BytePtr,
+        w3: BytePtr,
+        q8: BytePtr,
+        nc: Int,
+        mut res0: Float32,
+        mut res1: Float32,
+        mut res2: Float32,
+        mut res3: Float32,
+    ):
+    """ Tiled 4-row hardware-accelerated integer-domain SIMD dot product using AVX2 pmadd.ub.sw."""
+    dot_q6_k_q8_k_2rows(w0, w1, q8, nc, res0, res1)
+    dot_q6_k_q8_k_2rows(w2, w3, q8, nc, res2, res3)
+
+@always_inline
 def dequantize_row(dtype: UInt32, weight_row_ptr: BytePtr, dst: FloatPtr, nc: Int):
     """ Dequantize a single row into dst Float32 buffer."""
     if dtype == GGMLType.F32:
@@ -1009,6 +1202,20 @@ def matmul_quant_fused[ n: Int, ](
 
     if Int(q8_buf) != 0 and dtype == GGMLType.Q4_K and (nc % 256 == 0):
         var r = row_start
+        while r + 3 < row_end:
+            comptime for k in range(n):
+                var w_row0 = W[k].unsafe_offset(r * bytes_per_row)
+                var w_row1 = W[k].unsafe_offset((r + 1) * bytes_per_row)
+                var w_row2 = W[k].unsafe_offset((r + 2) * bytes_per_row)
+                var w_row3 = W[k].unsafe_offset((r + 3) * bytes_per_row)
+                dot_q4_k_q8_k_4rows(
+                    w_row0, w_row1, w_row2, w_row3, q8_buf, nc,
+                    C[k][unsafe_offset=r],
+                    C[k][unsafe_offset=r + 1],
+                    C[k][unsafe_offset=r + 2],
+                    C[k][unsafe_offset=r + 3],
+                )
+            r += 4
         while r + 1 < row_end:
             comptime for k in range(n):
                 var w_row0 = W[k].unsafe_offset(r * bytes_per_row)
@@ -1023,6 +1230,20 @@ def matmul_quant_fused[ n: Int, ](
 
     if Int(q8_buf) != 0 and dtype == GGMLType.Q6_K and (nc % 256 == 0):
         var r = row_start
+        while r + 3 < row_end:
+            comptime for k in range(n):
+                var w_row0 = W[k].unsafe_offset(r * bytes_per_row)
+                var w_row1 = W[k].unsafe_offset((r + 1) * bytes_per_row)
+                var w_row2 = W[k].unsafe_offset((r + 2) * bytes_per_row)
+                var w_row3 = W[k].unsafe_offset((r + 3) * bytes_per_row)
+                dot_q6_k_q8_k_4rows(
+                    w_row0, w_row1, w_row2, w_row3, q8_buf, nc,
+                    C[k][unsafe_offset=r],
+                    C[k][unsafe_offset=r + 1],
+                    C[k][unsafe_offset=r + 2],
+                    C[k][unsafe_offset=r + 3],
+                )
+            r += 4
         while r + 1 < row_end:
             comptime for k in range(n):
                 var w_row0 = W[k].unsafe_offset(r * bytes_per_row)
@@ -1165,6 +1386,19 @@ def gemv_quant(
 
         if n_workers <= 1 or rows < 512:
             var r = 0
+            while r + 3 < rows:
+                var w_row0 = w.unsafe_offset(r * bpr)
+                var w_row1 = w.unsafe_offset((r + 1) * bpr)
+                var w_row2 = w.unsafe_offset((r + 2) * bpr)
+                var w_row3 = w.unsafe_offset((r + 3) * bpr)
+                dot_q6_k_q8_k_4rows(
+                    w_row0, w_row1, w_row2, w_row3, q8_buf, cols,
+                    dst[unsafe_offset=r],
+                    dst[unsafe_offset=r + 1],
+                    dst[unsafe_offset=r + 2],
+                    dst[unsafe_offset=r + 3],
+                )
+                r += 4
             while r + 1 < rows:
                 var w_row0 = w.unsafe_offset(r * bpr)
                 var w_row1 = w.unsafe_offset((r + 1) * bpr)
@@ -1176,12 +1410,25 @@ def gemv_quant(
             q8_buf.unsafe_free()
             return
 
-        var chunk = (((rows + n_workers - 1) // n_workers) + 1) & ~1
+        var chunk = (((rows + n_workers - 1) // n_workers) + 3) & ~3
 
         def worker_fn_q8(wid: Int) {imm}:
             var r_start = wid * chunk
             var r_end = min((wid + 1) * chunk, rows)
             var r = r_start
+            while r + 3 < r_end:
+                var w_row0 = w.unsafe_offset(r * bpr)
+                var w_row1 = w.unsafe_offset((r + 1) * bpr)
+                var w_row2 = w.unsafe_offset((r + 2) * bpr)
+                var w_row3 = w.unsafe_offset((r + 3) * bpr)
+                dot_q6_k_q8_k_4rows(
+                    w_row0, w_row1, w_row2, w_row3, q8_buf, cols,
+                    dst[unsafe_offset=r],
+                    dst[unsafe_offset=r + 1],
+                    dst[unsafe_offset=r + 2],
+                    dst[unsafe_offset=r + 3],
+                )
+                r += 4
             while r + 1 < r_end:
                 var w_row0 = w.unsafe_offset(r * bpr)
                 var w_row1 = w.unsafe_offset((r + 1) * bpr)
@@ -1202,6 +1449,19 @@ def gemv_quant(
 
         if n_workers <= 1 or rows < 512:
             var r = 0
+            while r + 3 < rows:
+                var w_row0 = w.unsafe_offset(r * bpr)
+                var w_row1 = w.unsafe_offset((r + 1) * bpr)
+                var w_row2 = w.unsafe_offset((r + 2) * bpr)
+                var w_row3 = w.unsafe_offset((r + 3) * bpr)
+                dot_q4_k_q8_k_4rows(
+                    w_row0, w_row1, w_row2, w_row3, q8_buf, cols,
+                    dst[unsafe_offset=r],
+                    dst[unsafe_offset=r + 1],
+                    dst[unsafe_offset=r + 2],
+                    dst[unsafe_offset=r + 3],
+                )
+                r += 4
             while r + 1 < rows:
                 var w_row0 = w.unsafe_offset(r * bpr)
                 var w_row1 = w.unsafe_offset((r + 1) * bpr)
@@ -1213,12 +1473,25 @@ def gemv_quant(
             q8_buf.unsafe_free()
             return
 
-        var chunk = (((rows + n_workers - 1) // n_workers) + 1) & ~1
+        var chunk = (((rows + n_workers - 1) // n_workers) + 3) & ~3
 
         def worker_fn_q4(wid: Int) {imm}:
             var r_start = wid * chunk
             var r_end = min((wid + 1) * chunk, rows)
             var r = r_start
+            while r + 3 < r_end:
+                var w_row0 = w.unsafe_offset(r * bpr)
+                var w_row1 = w.unsafe_offset((r + 1) * bpr)
+                var w_row2 = w.unsafe_offset((r + 2) * bpr)
+                var w_row3 = w.unsafe_offset((r + 3) * bpr)
+                dot_q4_k_q8_k_4rows(
+                    w_row0, w_row1, w_row2, w_row3, q8_buf, cols,
+                    dst[unsafe_offset=r],
+                    dst[unsafe_offset=r + 1],
+                    dst[unsafe_offset=r + 2],
+                    dst[unsafe_offset=r + 3],
+                )
+                r += 4
             while r + 1 < r_end:
                 var w_row0 = w.unsafe_offset(r * bpr)
                 var w_row1 = w.unsafe_offset((r + 1) * bpr)

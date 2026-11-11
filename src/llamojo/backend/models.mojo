@@ -38,8 +38,10 @@ from .kernels_quant import (
     dot_quant_row,
     dot_q4_k_q8_k_row,
     dot_q4_k_q8_k_2rows,
+    dot_q4_k_q8_k_4rows,
     dot_q6_k_q8_k_row,
     dot_q6_k_q8_k_2rows,
+    dot_q6_k_q8_k_4rows,
     quantize_row_q8_k,
     matmul_quant_fused,
 )
@@ -288,6 +290,21 @@ def forward_layer_dense(
 
         if Int(sh[].q8_act) != 0 and lw.dtype_o == GGMLType.Q4_K and (q_dim % 256 == 0):
             var r = d0
+            while r + 3 < d1:
+                var w_row0 = lw.wo.unsafe_offset(r * bpr_wo)
+                var w_row1 = lw.wo.unsafe_offset((r + 1) * bpr_wo)
+                var w_row2 = lw.wo.unsafe_offset((r + 2) * bpr_wo)
+                var w_row3 = lw.wo.unsafe_offset((r + 3) * bpr_wo)
+                var res0: Float32 = 0.0
+                var res1: Float32 = 0.0
+                var res2: Float32 = 0.0
+                var res3: Float32 = 0.0
+                dot_q4_k_q8_k_4rows(w_row0, w_row1, w_row2, w_row3, sh[].q8_act, q_dim, res0, res1, res2, res3)
+                x[unsafe_offset=r] += res0
+                x[unsafe_offset=r + 1] += res1
+                x[unsafe_offset=r + 2] += res2
+                x[unsafe_offset=r + 3] += res3
+                r += 4
             while r + 1 < d1:
                 var w_row0 = lw.wo.unsafe_offset(r * bpr_wo)
                 var w_row1 = lw.wo.unsafe_offset((r + 1) * bpr_wo)
@@ -302,6 +319,21 @@ def forward_layer_dense(
                 x[unsafe_offset=r] += dot_q4_k_q8_k_row(w_row, sh[].q8_act, q_dim)
         elif Int(sh[].q8_act) != 0 and lw.dtype_o == GGMLType.Q6_K and (q_dim % 256 == 0):
             var r = d0
+            while r + 3 < d1:
+                var w_row0 = lw.wo.unsafe_offset(r * bpr_wo)
+                var w_row1 = lw.wo.unsafe_offset((r + 1) * bpr_wo)
+                var w_row2 = lw.wo.unsafe_offset((r + 2) * bpr_wo)
+                var w_row3 = lw.wo.unsafe_offset((r + 3) * bpr_wo)
+                var res0: Float32 = 0.0
+                var res1: Float32 = 0.0
+                var res2: Float32 = 0.0
+                var res3: Float32 = 0.0
+                dot_q6_k_q8_k_4rows(w_row0, w_row1, w_row2, w_row3, sh[].q8_act, q_dim, res0, res1, res2, res3)
+                x[unsafe_offset=r] += res0
+                x[unsafe_offset=r + 1] += res1
+                x[unsafe_offset=r + 2] += res2
+                x[unsafe_offset=r + 3] += res3
+                r += 4
             while r + 1 < d1:
                 var w_row0 = lw.wo.unsafe_offset(r * bpr_wo)
                 var w_row1 = lw.wo.unsafe_offset((r + 1) * bpr_wo)
@@ -377,6 +409,21 @@ def forward_layer_dense(
 
             if Int(sh[].q8_act) != 0 and lw.dtype_down == GGMLType.Q4_K and (hidden_dim % 256 == 0):
                 var r = d0
+                while r + 3 < d1:
+                    var w_row0 = lw.w_down.unsafe_offset(r * bpr_down)
+                    var w_row1 = lw.w_down.unsafe_offset((r + 1) * bpr_down)
+                    var w_row2 = lw.w_down.unsafe_offset((r + 2) * bpr_down)
+                    var w_row3 = lw.w_down.unsafe_offset((r + 3) * bpr_down)
+                    var res0: Float32 = 0.0
+                    var res1: Float32 = 0.0
+                    var res2: Float32 = 0.0
+                    var res3: Float32 = 0.0
+                    dot_q4_k_q8_k_4rows(w_row0, w_row1, w_row2, w_row3, sh[].q8_act, hidden_dim, res0, res1, res2, res3)
+                    x[unsafe_offset=r] += res0
+                    x[unsafe_offset=r + 1] += res1
+                    x[unsafe_offset=r + 2] += res2
+                    x[unsafe_offset=r + 3] += res3
+                    r += 4
                 while r + 1 < d1:
                     var w_row0 = lw.w_down.unsafe_offset(r * bpr_down)
                     var w_row1 = lw.w_down.unsafe_offset((r + 1) * bpr_down)
@@ -391,6 +438,21 @@ def forward_layer_dense(
                     x[unsafe_offset=r] += dot_q4_k_q8_k_row(w_row, sh[].q8_act, hidden_dim)
             elif Int(sh[].q8_act) != 0 and lw.dtype_down == GGMLType.Q6_K and (hidden_dim % 256 == 0):
                 var r = d0
+                while r + 3 < d1:
+                    var w_row0 = lw.w_down.unsafe_offset(r * bpr_down)
+                    var w_row1 = lw.w_down.unsafe_offset((r + 1) * bpr_down)
+                    var w_row2 = lw.w_down.unsafe_offset((r + 2) * bpr_down)
+                    var w_row3 = lw.w_down.unsafe_offset((r + 3) * bpr_down)
+                    var res0: Float32 = 0.0
+                    var res1: Float32 = 0.0
+                    var res2: Float32 = 0.0
+                    var res3: Float32 = 0.0
+                    dot_q6_k_q8_k_4rows(w_row0, w_row1, w_row2, w_row3, sh[].q8_act, hidden_dim, res0, res1, res2, res3)
+                    x[unsafe_offset=r] += res0
+                    x[unsafe_offset=r + 1] += res1
+                    x[unsafe_offset=r + 2] += res2
+                    x[unsafe_offset=r + 3] += res3
+                    r += 4
                 while r + 1 < d1:
                     var w_row0 = lw.w_down.unsafe_offset(r * bpr_down)
                     var w_row1 = lw.w_down.unsafe_offset((r + 1) * bpr_down)
