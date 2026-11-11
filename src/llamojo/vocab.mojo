@@ -246,24 +246,25 @@ struct llama_vocab(Movable):
 
         # Handle hex byte fallback: <0xXX>
         if s.byte_length() == 6:
-            if s[byte=0:3] == "<0x" and s[byte=5:6] == ">":
-                var h0 = s[byte=3:4]
-                var h1 = s[byte=4:5]
+            var s_ptr = s.unsafe_ptr()
+            if s_ptr[unsafe_offset=0] == 0x3C and s_ptr[unsafe_offset=1] == 0x30 and s_ptr[unsafe_offset=2] == 0x78 and s_ptr[unsafe_offset=5] == 0x3E:
+                var c0 = Int(s_ptr[unsafe_offset=3])
+                var c1 = Int(s_ptr[unsafe_offset=4])
                 var b0: Int = 0
                 var b1: Int = 0
-                if h0 >= "0" and h0 <= "9":
-                    b0 = ord(h0) - ord("0")
-                elif h0 >= "A" and h0 <= "F":
-                    b0 = ord(h0) - ord("A") + 10
-                elif h0 >= "a" and h0 <= "f":
-                    b0 = ord(h0) - ord("a") + 10
+                if c0 >= ord("0") and c0 <= ord("9"):
+                    b0 = c0 - ord("0")
+                elif c0 >= ord("A") and c0 <= ord("F"):
+                    b0 = c0 - ord("A") + 10
+                elif c0 >= ord("a") and c0 <= ord("f"):
+                    b0 = c0 - ord("a") + 10
 
-                if h1 >= "0" and h1 <= "9":
-                    b1 = ord(h1) - ord("0")
-                elif h1 >= "A" and h1 <= "F":
-                    b1 = ord(h1) - ord("A") + 10
-                elif h1 >= "a" and h1 <= "f":
-                    b1 = ord(h1) - ord("a") + 10
+                if c1 >= ord("0") and c1 <= ord("9"):
+                    b1 = c1 - ord("0")
+                elif c1 >= ord("A") and c1 <= ord("F"):
+                    b1 = c1 - ord("A") + 10
+                elif c1 >= ord("a") and c1 <= ord("f"):
+                    b1 = c1 - ord("a") + 10
 
                 var byte_val = UInt8((b0 << 4) | b1)
                 var bytes = List[UInt8]()

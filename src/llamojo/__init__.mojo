@@ -108,6 +108,7 @@ from .backend import (
     dot_q6_k_row,
     dot_mxfp4_row,
     dot_quant_row,
+    dequantize_row,
     matmul_quant_fused,
     matmul_quant_fused_biased,
     gemv_quant,

@@ -146,6 +146,7 @@ def forward_layer_dense(
     var workers = sh[].workers
     var dim = cfg.hidden_dim
     var hidden_dim = cfg.intermediate_dim
+    var q_dim = cfg.n_heads * cfg.head_dim
     var kv_dim = cfg.n_kv_heads * cfg.head_dim
     var head_dim = cfg.head_dim
     var n_heads = cfg.n_heads
@@ -153,6 +154,8 @@ def forward_layer_dense(
 
     var d0 = chunk_start(dim, wid, workers)
     var d1 = chunk_end(dim, wid, workers)
+    var q0 = chunk_start(q_dim, wid, workers)
+    var q1 = chunk_end(q_dim, wid, workers)
     var kv0 = chunk_start(kv_dim, wid, workers)
     var kv1 = chunk_end(kv_dim, wid, workers)
     var f0 = chunk_start(hidden_dim, wid, workers)
@@ -174,14 +177,14 @@ def forward_layer_dense(
     var v_ptr = v_buf
 
     if Int(lw.wq) != 0:
-        if kv_dim == dim and lw.dtype_q == lw.dtype_k and lw.dtype_q == lw.dtype_v:
+        if q_dim == dim and kv_dim == dim and lw.dtype_q == lw.dtype_k and lw.dtype_q == lw.dtype_v:
             var c_qkv = StaticTuple[FloatPtr, 3](q_ptr, k_ptr, v_ptr)
             var w_qkv = StaticTuple[BytePtr, 3](lw.wq, lw.wk, lw.wv)
             matmul_quant_fused[3](lw.dtype_q, c_qkv, xbp, w_qkv, d0, d1, dim)
         else:
             var c_q = StaticTuple[FloatPtr, 1](q_ptr)
             var w_q = StaticTuple[BytePtr, 1](lw.wq)
-            matmul_quant_fused[1](lw.dtype_q, c_q, xbp, w_q, d0, d1, dim)
+            matmul_quant_fused[1](lw.dtype_q, c_q, xbp, w_q, q0, q1, dim)
 
             if lw.dtype_k == lw.dtype_v:
                 var c_kv = StaticTuple[FloatPtr, 2](k_ptr, v_ptr)
@@ -198,7 +201,7 @@ def forward_layer_dense(
     else:
         # Pass-through for partial synthetic models
         if wid == 0:
-            for i in range(dim):
+            for i in range(q_dim):
                 q_ptr[unsafe_offset=i] = xbp[unsafe_offset=i]
             for i in range(kv_dim):
                 k_ptr[unsafe_offset=i] = xbp[unsafe_offset=i]
@@ -209,6 +212,9 @@ def forward_layer_dense(
     # 3. RoPE: apply in-place to worker's heads (worker 0 applies for all if 1 worker)
     if wid == 0:
         if cfg.rope_scaling_type == 2: # YaRN
+            # In GGUF, rope.scaling.factor is the context extension factor (e.g. 16.0).
+            # YaRN frequency scaling factor passed to apply_rope_yarn is 1.0 / factor (e.g. 1.0 / 16.0).
+            var freq_scale = (Float32(1.0) / cfg.rope_freq_scale) if cfg.rope_freq_scale > 1.0 else cfg.rope_freq_scale
             apply_rope_yarn(
                 q,
                 k_buf,
@@ -217,7 +223,7 @@ def forward_layer_dense(
                 head_dim,
                 pos,
                 cfg.rope_theta,
-                cfg.rope_freq_scale,
+                freq_scale,
                 cfg.rope_orig_ctx_len,
                 cfg.yarn_beta_fast,
                 cfg.yarn_beta_slow,
@@ -263,10 +269,10 @@ def forward_layer_dense(
     if Int(lw.wo) != 0:
         var blk_sz_wo = Int(ggml_block_size(lw.dtype_o))
         var type_sz_wo = Int(ggml_type_size(lw.dtype_o))
-        var bpr_wo = (dim // blk_sz_wo) * type_sz_wo
+        var bpr_wo = (q_dim // blk_sz_wo) * type_sz_wo
         for r in range(d0, d1):
             var w_row = lw.wo.unsafe_offset(r * bpr_wo)
-            var res_wo = dot_quant_row(lw.dtype_o, w_row, xb, dim)
+            var res_wo = dot_quant_row(lw.dtype_o, w_row, xb, q_dim)
             x[unsafe_offset=r] += res_wo
     else:
         for r in range(d0, d1):

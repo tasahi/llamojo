@@ -346,7 +346,7 @@ struct llama_context(Movable):
         var max_q_dim = max(self.dim, cfg.n_heads * cfg.head_dim)
         var max_ffn_dim = max(self.hidden_dim, 12288 if cfg.arch == "gemma4" else self.hidden_dim)
         self.x = unsafe_alloc[Float32](self.dim)
-        self.xb = unsafe_alloc[Float32](self.dim)
+        self.xb = unsafe_alloc[Float32](max_q_dim)
         self.xb2 = unsafe_alloc[Float32](max_q_dim)
         self.hb = unsafe_alloc[Float32](max_ffn_dim)
         self.hb2 = unsafe_alloc[Float32](max_ffn_dim)
