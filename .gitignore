@@ -5,3 +5,4 @@ build/libllama.so
 data/
 __pycache__/
 models/
+bin/
