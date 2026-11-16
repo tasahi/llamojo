@@ -184,8 +184,27 @@ tests/
 4. **Python Interoperability Package:**
    - Implemented `llamojo.Timestral` and `llamojo.Forecast` in [`python/llamojo/timestral.py`](../python/llamojo/timestral.py) supporting zero-copy NumPy array forecasting, `.median`, `.quantile(q)`, and `.impute(...)`.
 5. **Inference Latency Benchmarking:**
-   - Verified single-threaded CPU latencies: $24.45\text{ ms}$ ($T=64$), $26.46\text{ ms}$ ($T=128$), $40.81\text{ ms}$ ($T=256$).
+   - Verified single-threaded CPU latencies: $20.01\text{ ms}$ ($T=64$), $31.12\text{ ms}$ ($T=128$), $32.65\text{ ms}$ ($T=256$).
 6. **Unit Verification Suite:** Passing in [`tests/test_timestral_phase5.mojo`](../tests/test_timestral_phase5.mojo).
+
+
+---
+
+### Gap A Remedy: Categorical Covariate Target Encoding [COMPLETED]
+*(Full documentation and schema specification in [`docs/phases/timestral_covariates.md`](./phases/timestral_covariates.md))*
+
+**Goal:** Replicate the exact per-series smoothed mean-target encoding from upstream `timestral.covariate_encoding.target_encode`:
+
+$$\text{encoded}(c) = \frac{\text{smooth} \cdot \mu_{\text{item}} + \sum_{(t, c)} y_t}{\text{smooth} + N_{(t, c)}}$$
+
+1. **Pure Mojo Engine (`src/llamojo/timestral/covariates.mojo`):**
+   - Implemented `TargetEncodingResult(Movable)` and `target_encode(...)` with zero external dependencies.
+   - Handled non-finite target exclusion, unique category sorting, distinct `nan_slot`, and `unseen` future category assignment to series mean $\mu_{\text{item}}$.
+2. **Python Integration (`python/llamojo/timestral.py`):**
+   - Exposed `target_encode` matching upstream signature.
+   - Added `categorical_past_covariates` and `categorical_known_covariates` support in `Timestral.forecast(...)`.
+3. **Unit & Parity Verification:**
+   - Pure Mojo unit suite [`tests/test_timestral_categorical.mojo`](../tests/test_timestral_categorical.mojo) verified exact matching against analytical values and Python `timestral.covariate_encoding.target_encode`.
 
 
 ---

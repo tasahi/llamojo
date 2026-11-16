@@ -47,6 +47,10 @@ from .model import (
     forward_quantile_head,
     forward_timestral,
 )
+from .covariates import (
+    TargetEncodingResult,
+    target_encode,
+)
 from .forecast import (
     ForecastResult,
     TimestralForecaster,

@@ -355,4 +355,6 @@ from .timestral import (
     forward_timestral,
     ForecastResult,
     TimestralForecaster,
+    TargetEncodingResult,
+    target_encode,
 )
