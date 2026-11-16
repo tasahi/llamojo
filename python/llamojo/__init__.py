@@ -20,6 +20,7 @@ from .hf_compat import (
     LlamojoTokenizer,
 )
 from .whisper import Whisper, WhisperSegmentResult
+from .timestral import Timestral, Forecast
 from ._views import TensorView
 from .safetensors import SafetensorsFile, load_safetensors_dir, save_safetensors
 from .convert import convert_safetensors_to_gguf
@@ -32,6 +33,8 @@ __all__ = [
     "CausalLMOutput",
     "Whisper",
     "WhisperSegmentResult",
+    "Timestral",
+    "Forecast",
     "TensorView",
     "SafetensorsFile",
     "load_safetensors_dir",

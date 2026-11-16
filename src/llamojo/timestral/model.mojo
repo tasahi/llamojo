@@ -307,9 +307,6 @@ def forward_variate_attention(
     Permutes logical shape from (R, N, D) to (N, R, D), runs unmasked self-attention across R,
     applies sdpa_sigmoid gating, and adds residual output.
     """
-    if n_rows <= 1:
-        return
-
     var d_model = config.d_model
     var num_heads = config.num_heads
     var head_dim = config.head_dim

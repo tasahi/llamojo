@@ -776,3 +776,114 @@ def whisper_full_get_segment_text(ctx: whisper_context_p, i_segment: Int32) abi(
         ctx[].last_cstr.append(bytes[b])
     ctx[].last_cstr.append(0)
     return BytePtr(unsafe_from_address=Int(ctx[].last_cstr.unsafe_ptr()))
+
+
+# ─── Timestral C-ABI Exports ──────────────────────────────────────────────────
+
+from llamojo import TimestralForecaster, ForecastResult
+
+comptime timestral_forecaster_p = Pointer[TimestralForecaster, MutUntrackedOrigin]
+comptime timestral_forecast_p = Pointer[ForecastResult, MutUntrackedOrigin]
+
+@export
+def llamojo_timestral_load(path_cstr: BytePtr, max_rows: Int32 = 16, max_patches: Int32 = 128) abi("c") -> timestral_forecaster_p:
+    """ Load a Timestral model from GGUF file and return an opaque handle."""
+    if Int(path_cstr) == 0:
+        return null_ptr[TimestralForecaster]()
+    var path = _cstr_to_string(path_cstr)
+    try:
+        var forecaster = TimestralForecaster.from_gguf(path, max_rows=Int(max_rows), max_patches=Int(max_patches))
+        var handle = unsafe_alloc[TimestralForecaster](1)
+        handle.unsafe_write(forecaster^)
+        return handle
+    except:
+        return null_ptr[TimestralForecaster]()
+
+@export
+def llamojo_timestral_free(forecaster: timestral_forecaster_p) abi("c"):
+    """ Free a Timestral model handle."""
+    if Int(forecaster) != 0:
+        forecaster[].free()
+        forecaster.unsafe_deinit_pointee()
+        forecaster.unsafe_free()
+
+@export
+def llamojo_timestral_forecast(
+        forecaster: timestral_forecaster_p,
+        context: FloatPtr,
+        t_context: Int32,
+        prediction_length: Int32,
+        batch_size: Int32 = 1,
+        n_targets: Int32 = 1,
+        past_covariates: FloatPtr = null_ptr[Float32](),
+        n_past_cov: Int32 = 0,
+        known_covariates: FloatPtr = null_ptr[Float32](),
+        n_known_cov: Int32 = 0,
+    ) abi("c") -> timestral_forecast_p:
+    """ Execute probabilistic forecast and return ForecastResult handle."""
+    if Int(forecaster) == 0 or Int(context) == 0:
+        return null_ptr[ForecastResult]()
+    try:
+        var res = forecaster[].forecast(
+            context=context,
+            t_context=Int(t_context),
+            prediction_length=Int(prediction_length),
+            batch_size=Int(batch_size),
+            n_targets=Int(n_targets),
+            past_covariates=past_covariates,
+            n_past_cov=Int(n_past_cov),
+            known_covariates=known_covariates,
+            n_known_cov=Int(n_known_cov),
+        )
+        var handle = unsafe_alloc[ForecastResult](1)
+        handle.unsafe_write(res^)
+        return handle
+    except:
+        return null_ptr[ForecastResult]()
+
+@export
+def llamojo_timestral_forecast_free(forecast: timestral_forecast_p) abi("c"):
+    """ Free a ForecastResult handle."""
+    if Int(forecast) != 0:
+        forecast[].free()
+        forecast.unsafe_deinit_pointee()
+        forecast.unsafe_free()
+
+@export
+def llamojo_timestral_forecast_get_quantiles(forecast: timestral_forecast_p) abi("c") -> FloatPtr:
+    """ Return pointer to contiguous (B, V, H, 21) float32 quantile tensor."""
+    if Int(forecast) == 0:
+        return null_ptr[Float32]()
+    return forecast[].data
+
+@export
+def llamojo_timestral_forecast_median(forecast: timestral_forecast_p, b: Int32, v: Int32, h: Int32) abi("c") -> Float32:
+    """ Return median forecast (q = 0.50) at step h."""
+    if Int(forecast) == 0:
+        return 0.0
+    return forecast[].median(Int(b), Int(v), Int(h))
+
+@export
+def llamojo_timestral_forecast_quantile(forecast: timestral_forecast_p, b: Int32, v: Int32, h: Int32, q: Float32) abi("c") -> Float32:
+    """ Return or interpolate quantile level q at step h."""
+    if Int(forecast) == 0:
+        return 0.0
+    return forecast[].quantile(Int(b), Int(v), Int(h), q)
+
+@export
+def llamojo_timestral_impute(
+        forecaster: timestral_forecaster_p,
+        data: FloatPtr,
+        t_total: Int32,
+        batch_size: Int32 = 1,
+        n_targets: Int32 = 1,
+    ) abi("c") -> Int32:
+    """ In-place causal imputation of NaN gaps. Returns 0 on success, -1 on failure."""
+    if Int(forecaster) == 0 or Int(data) == 0:
+        return -1
+    try:
+        forecaster[].impute(data, t_total=Int(t_total), batch_size=Int(batch_size), n_targets=Int(n_targets))
+        return 0
+    except:
+        return -1
+
