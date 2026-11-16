@@ -2,11 +2,11 @@
 
 ## 1. Overview & Objective
 
-Phase 3 implements hardware-level SIMD activation quantization and multi-row register tiling across the transformer layer pipeline in [src/llamojo/backend/models.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/models.mojo), targeting parity with `llama.cpp`'s AVX2 kernel throughput.
+Phase 3 implements hardware-level SIMD activation quantization and multi-row register tiling across the transformer layer pipeline in [src/llamojo/backend/models.mojo](../../src/llamojo/backend/models.mojo), targeting parity with `llama.cpp`'s AVX2 kernel throughput.
 
 Key enhancements delivered in Phase 3:
-1. **Shared Q8_K Activation Workspace Allocation**: Thread-safe persistent allocation of quantized activation scratch space in `LlamaPoolShared` ([src/llamojo/backend/threadpool.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/threadpool.mojo)).
-2. **Fused Multi-Matrix Q8_K Vectorization (`matmul_quant_fused`)**: Extended `matmul_quant_fused` to accept pre-quantized `Q8_K` activations and dispatch 2-row tiled AVX2 `pmadd.ub.sw` vector operations ([src/llamojo/backend/kernels_quant.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_quant.mojo)).
+1. **Shared Q8_K Activation Workspace Allocation**: Thread-safe persistent allocation of quantized activation scratch space in `LlamaPoolShared` ([src/llamojo/backend/threadpool.mojo](../../src/llamojo/backend/threadpool.mojo)).
+2. **Fused Multi-Matrix Q8_K Vectorization (`matmul_quant_fused`)**: Extended `matmul_quant_fused` to accept pre-quantized `Q8_K` activations and dispatch 2-row tiled AVX2 `pmadd.ub.sw` vector operations ([src/llamojo/backend/kernels_quant.mojo](../../src/llamojo/backend/kernels_quant.mojo)).
 3. **End-to-End Layer Vectorization in `forward_layer_dense`**:
    - Pre-quantize attention-normalized activations ($x_{\text{norm}} \to \text{Q8\_K}$) once per token for all QKV projections (`wq`, `wk`, `wv`).
    - 2-row tiled AVX2 execution for attention output projection (`wo`).
@@ -35,7 +35,7 @@ struct LlamaPoolShared:
 Each worker thread can access `sh[].q8_act` with zero heap allocation overhead.
 
 ### 2.2. Hardware-Accelerated Fused Projections (`matmul_quant_fused`)
-In [src/llamojo/backend/kernels_quant.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_quant.mojo), `matmul_quant_fused[n]` was updated to accept `q8_buf`:
+In [src/llamojo/backend/kernels_quant.mojo](../../src/llamojo/backend/kernels_quant.mojo), `matmul_quant_fused[n]` was updated to accept `q8_buf`:
 ```mojo
 if Int(q8_buf) != 0 and dtype == GGMLType.Q4_K and (nc % 256 == 0):
     var r = row_start
@@ -54,7 +54,7 @@ if Int(q8_buf) != 0 and dtype == GGMLType.Q4_K and (nc % 256 == 0):
 This replaces 32-bit floating point multiplies with 16-element integer dot products via direct LLVM intrinsic `llvm.x86.avx2.pmadd.ub.sw` and `llvm.x86.avx2.pmadd.wd`.
 
 ### 2.3. Full Pipeline Integration in `forward_layer_dense`
-In [src/llamojo/backend/models.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/models.mojo):
+In [src/llamojo/backend/models.mojo](../../src/llamojo/backend/models.mojo):
 1. **Attention Sub-block**:
    - `xbp` (RMSNorm result) is quantized to `q8_act` by worker 0, synchronized via `llama_barrier(sh)`.
    - `wq`, `wk`, `wv` compute simultaneously with 2-row tiling via `matmul_quant_fused`.

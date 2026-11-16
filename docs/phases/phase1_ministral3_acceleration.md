@@ -13,7 +13,7 @@ Initial benchmark baseline (Single-threaded `mojo run` over 9P WSL filesystem mo
 ## 2. Root Cause Analysis
 
 ### 2.1. WSL2 Core Topology & `num_performance_cores()`
-In [src/llamojo/llama.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/llama.mojo), thread pool initialization defaulted to:
+In [src/llamojo/llama.mojo](../../src/llamojo/llama.mojo), thread pool initialization defaulted to:
 ```mojo
 cparams.n_threads = max(1, num_performance_cores())
 ```
@@ -39,7 +39,7 @@ Accessing the model at `/mnt/c/...` traverses the Windows-WSL 9P network protoco
 ## 3. Implementation Details
 
 ### 3.1. Thread Pool Initialization Refactor
-Updated [src/llamojo/llama.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/llama.mojo) to import and prefer `num_logical_cores()`:
+Updated [src/llamojo/llama.mojo](../../src/llamojo/llama.mojo) to import and prefer `num_logical_cores()`:
 ```mojo
 from sys.info import num_logical_cores, num_performance_cores
 ...
@@ -50,7 +50,7 @@ cparams.n_threads = hw_threads
 This guarantees that all persistent spin-barrier workers in `ParallelContext` utilize all available logical CPU cores.
 
 ### 3.2. Native Native Binary Compilation & Dynamic Linking
-Built optimized standalone executable using [tools/build_release.sh](file:///mnt/c/Documents/Mojo/llamojo/tools/build_release.sh):
+Built optimized standalone executable using [tools/build_release.sh](../../tools/build_release.sh):
 - `-O3`: Maximum loop unrolling, LLVM vectorization, and inlining.
 - `--mcpu=x86-64-v3`: Generates hardware AVX2, FMA, and BMI2 instructions.
 - `--fp-mode=contract=fast`: Aggressive floating point contraction.

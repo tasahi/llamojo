@@ -47,3 +47,7 @@ from .model import (
     forward_quantile_head,
     forward_timestral,
 )
+from .forecast import (
+    ForecastResult,
+    TimestralForecaster,
+)

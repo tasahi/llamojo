@@ -12,7 +12,7 @@ Phase 4 tackles the final computational bottleneck that was limiting autoregress
 ## 2. Root Cause Analysis: The 131k Vocabulary Sampler Bottleneck
 
 ### 2.1. The $O(V^2)$ Selection Sort Trap
-In [src/llamojo/sampler.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/sampler.mojo), `_sort_token_data_descending` was implemented as a full selection sort over all candidates in `cur_p`:
+In [src/llamojo/sampler.mojo](../../src/llamojo/sampler.mojo), `_sort_token_data_descending` was implemented as a full selection sort over all candidates in `cur_p`:
 ```mojo
 for i in range(n):
     var best_idx = i
@@ -43,7 +43,7 @@ Applying temperature scaling over all 131,072 elements before pruning was wastef
 ## 3. Implementation Details
 
 ### 3.1. $O(K \cdot V)$ Partial Selection Sort
-In [src/llamojo/sampler.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/sampler.mojo):
+In [src/llamojo/sampler.mojo](../../src/llamojo/sampler.mojo):
 Updated `_sort_token_data_descending` to accept an optional `top_k: Int = -1`:
 ```mojo
 def _sort_token_data_descending(
@@ -71,7 +71,7 @@ When `_apply_top_k` executes with $K = 40$:
 - **Reduction factor: 1,638× fewer operations per token!**
 
 ### 3.2. 4× AVX2 Unrolling in Attention Micro-Kernels
-In [src/llamojo/backend/kernels_attn.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_attn.mojo):
+In [src/llamojo/backend/kernels_attn.mojo](../../src/llamojo/backend/kernels_attn.mojo):
 Refactored `dot_vectors` and `axpy_vector` to process 32 floats per loop iteration across four parallel 8-lane SIMD registers:
 ```mojo
 @always_inline

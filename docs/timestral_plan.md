@@ -152,22 +152,21 @@ tests/
 
 ---
 
-### Phase 4: GGUF Loader, Workspace State & Public API (`loader.mojo`, `forecast.mojo`)
+### Phase 4: GGUF Loader, Workspace State & Public API (`loader.mojo`, `forecast.mojo`) [COMPLETED]
+*(Full documentation and schema specification in [`docs/phases/timestral_phase4.md`](./phases/timestral_phase4.md))*
+
 **Goal:** Provide a clean, zero-allocation runtime API matching the ergonomics of `TimestralForecaster` in [`timestral_about.md`](./timestral_about.md).
 
-1. **Weight Loader (`loader.mojo`):**
-   - Maps `GGUFTensorInfo` views to `TimestralLayerWeights` structs.
-   - Validates `block_schedule` against tensor counts.
-2. **Pre-Allocated State (`TimestralState`):**
-   - Allocates reusable activation scratchpads (`q`, `k`, `v`, `attn_scores`, `ffn_buf`, `patch_buf`) sized for `(max_batch, max_variates, max_patches)` to ensure zero heap allocations during inference loops.
-3. **High-Level API (`forecast.mojo`):**
+1. **Weight Loader & State Arena:**
+   - Implemented zero-copy pointer mapping and reusable `TimestralState` scratchpads dynamically adaptable to batch size, variate count, and sequence length.
+2. **`ForecastResult`:**
+   - Multidimensional probabilistic container `(B, V, H, 21)` providing direct `.median(b, v, h)` access, linear quantile interpolation via `.quantile(b, v, h, q)`, and non-crossing quantile guarantees.
+3. **High-Level API (`TimestralForecaster`):**
    - `TimestralForecaster.from_gguf(path: String) -> TimestralForecaster`
-   - `forecaster.forecast(context, prediction_length, past_covariates=..., known_covariates=..., categorical_past_covariates=..., categorical_known_covariates=...) -> ForecastResult`
-   - `ForecastResult` methods:
-     - `.quantiles` (raw `(B, V, H, 21)` buffer)
-     - `.median()` (returns $q = 0.50$ slice `(B, V, H)`)
-     - `.quantile(q: Float32)` (interpolates or selects exact knot e.g. `0.90`, `0.95`)
-   - Convenience `forecaster.impute(data, strategy=...)` implementing both iterative one-step gap filling and multivariate cross-imputation documented in [`timestral_about.md`](./timestral_about.md#imputation).
+   - `forecaster.forecast(...)`: Zero-shot forecasting accepting targets, past covariates, and known-future covariates.
+   - `forecaster.impute(...)`: Automatic causal missing-data imputation filling `NaN` gaps.
+4. **Unit Verification Suite:** Passing in [`tests/test_timestral_phase4.mojo`](../tests/test_timestral_phase4.mojo).
+
 
 ---
 

@@ -93,7 +93,7 @@ if score_opt:
 
 ## 3. Verification & Testing
 
-A new test suite [`tests/test_ministral3_phase1.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_ministral3_phase1.mojo) was constructed. It generates a spec-compliant synthetic GGUF v3 file modelling the complete parameter set of **Ministral 3 3B**:
+A new test suite [`tests/test_ministral3_phase1.mojo`](../../tests/test_ministral3_phase1.mojo) was constructed. It generates a spec-compliant synthetic GGUF v3 file modelling the complete parameter set of **Ministral 3 3B**:
 - Architecture: `mistral3`
 - Dimensions: $d_{\text{model}} = 3072$, $d_{\text{ffn}} = 9216$, $N_{\text{layers}} = 26$
 - Attention heads: 32 query heads, 8 KV heads ($d_{\text{head}} = 96$)

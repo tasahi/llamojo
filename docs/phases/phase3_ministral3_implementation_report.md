@@ -80,7 +80,7 @@ Phase 3 verified that this fallback operates seamlessly during multi-threaded qu
 
 ## 3. Verification & Testing
 
-A comprehensive integration test suite [`tests/test_ministral3_phase3.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_ministral3_phase3.mojo) was constructed.
+A comprehensive integration test suite [`tests/test_ministral3_phase3.mojo`](../../tests/test_ministral3_phase3.mojo) was constructed.
 
 The test generates a full synthetic Ministral 3 GGUF v3 model featuring:
 - Architecture: `mistral3`

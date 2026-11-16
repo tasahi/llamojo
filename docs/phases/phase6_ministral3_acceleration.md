@@ -23,7 +23,7 @@ In **Phase 6: Batched Prompt GEMM & Unified Persistent Parallel Dispatch**, we r
 ## 2. Root Cause Analysis
 
 ### 2.1. The $N \times L$ Parallel Dispatch Overhead
-In [src/llamojo/llama.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/llama.mojo), `llama_decode` originally contained an outer loop over prompt tokens:
+In [src/llamojo/llama.mojo](../../src/llamojo/llama.mojo), `llama_decode` originally contained an outer loop over prompt tokens:
 ```mojo
 for tok_idx in range(n_tokens):
     ...
@@ -45,7 +45,7 @@ Previously, each worker thread or single-threaded pass re-executed token embeddi
 ## 3. Implementation Details
 
 ### 3.1. Unified Persistent Batch Worker Dispatch
-In [src/llamojo/llama.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/llama.mojo):
+In [src/llamojo/llama.mojo](../../src/llamojo/llama.mojo):
 Replaced the per-layer `parallelize` loop with a single outer batch worker closure:
 
 ```mojo

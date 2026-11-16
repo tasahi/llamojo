@@ -353,4 +353,6 @@ from .timestral import (
     monotone_quantiles,
     forward_quantile_head,
     forward_timestral,
+    ForecastResult,
+    TimestralForecaster,
 )

@@ -132,7 +132,7 @@ llama_barrier(sh)
 
 ## 3. Verification & Testing
 
-A dedicated test suite [`tests/test_ministral3_phase2.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_ministral3_phase2.mojo) was constructed to validate:
+A dedicated test suite [`tests/test_ministral3_phase2.mojo`](../../tests/test_ministral3_phase2.mojo) was constructed to validate:
 1. **Boundary & Ramp Correctness**:
    - $\text{corr\_low} \ge 0$, $\text{corr\_high} < d_{\text{head}}$, $\text{corr\_low} \le \text{corr\_high}$.
    - $\text{ramp\_mix} = 1.0$ at boundary low, $0.0$ at boundary high, and strictly bounded $y \in [0, 1]$ in the interior.

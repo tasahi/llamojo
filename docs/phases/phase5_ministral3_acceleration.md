@@ -91,10 +91,10 @@ The 4-row tiling kernels were integrated across the entire forward graph:
 
 ## 5. Summary of Files Changed
 
-1. [src/llamojo/backend/kernels_quant.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_quant.mojo):
+1. [src/llamojo/backend/kernels_quant.mojo](../../src/llamojo/backend/kernels_quant.mojo):
    - Added `dot_q4_k_q8_k_4rows` and `dot_q6_k_q8_k_4rows`.
    - Updated `matmul_quant_fused` with 4-row unrolling and clean fallbacks.
    - Updated `gemv_quant` with 4-row unrolling for both single-thread and multi-threaded worker paths.
-2. [src/llamojo/backend/models.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/models.mojo):
+2. [src/llamojo/backend/models.mojo](../../src/llamojo/backend/models.mojo):
    - Imported `dot_q4_k_q8_k_4rows` and `dot_q6_k_q8_k_4rows`.
    - Wired 4-row tiling into `wo` (Attention Output projection) and `w_down` (FFN Down projection).

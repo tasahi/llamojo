@@ -89,16 +89,22 @@ struct TimeSeriesBatch(Movable):
             n_known_cov: Int = 0,
         ) -> Self:
         """ Create a non-owning wrapper over existing float buffers."""
-        var b = Self.__new__()
-        b.batch_size = batch_size
-        b.n_targets = n_targets
-        b.t_context = t_context
-        b.t_horizon = t_horizon
-        b.n_past_cov = n_past_cov
-        b.n_known_cov = n_known_cov
+        var b = Self(
+            batch_size=batch_size,
+            n_targets=n_targets,
+            t_context=t_context,
+            t_horizon=t_horizon,
+            n_past_cov=0,
+            n_known_cov=0,
+        )
+        # Free default allocated context_ptr and replace with non-owning pointers
+        if Int(b.context_ptr) != 0:
+            b.context_ptr.unsafe_free()
         b.context_ptr = context_ptr
         b.past_cov_ptr = past_cov_ptr
         b.known_cov_ptr = known_cov_ptr
+        b.n_past_cov = n_past_cov
+        b.n_known_cov = n_known_cov
         b.owns_memory = False
         return b^
 

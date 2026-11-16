@@ -12,14 +12,14 @@ Phase 2 builds directly upon Phase 1's hardware topology foundation by optimizin
 ## 2. Root Cause Analysis of Phase 1 Bottlenecks
 
 ### 2.1. Residual Single-Thread Clamps in `LlamaWorkerPool`
-While Phase 1 updated `llama_context_default_params` to use `num_logical_cores()`, the underlying `LlamaWorkerPool` struct in [src/llamojo/backend/threadpool.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/threadpool.mojo) still clamped thread initialization:
+While Phase 1 updated `llama_context_default_params` to use `num_logical_cores()`, the underlying `LlamaWorkerPool` struct in [src/llamojo/backend/threadpool.mojo](../../src/llamojo/backend/threadpool.mojo) still clamped thread initialization:
 ```mojo
 var hw_cores = num_performance_cores()
 self.workers = max(1, min(actual_workers, hw_cores))
 ```
 Because `num_performance_cores()` returns `1` inside WSL2 on Intel hybrid processors, any `workers` value passed in was immediately clamped back down to `1`. Consequently, internal spin barriers and layer workers ran on a single thread.
 
-Similarly, in [src/llamojo/backend/kernels_quant.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_quant.mojo), `gemv_quant`, `gemv_gelu_biased`, and `gemv_gate_up_fused` defaulted unassigned worker counts to `num_performance_cores()`, preventing dynamic multi-threading.
+Similarly, in [src/llamojo/backend/kernels_quant.mojo](../../src/llamojo/backend/kernels_quant.mojo), `gemv_quant`, `gemv_gelu_biased`, and `gemv_gate_up_fused` defaulted unassigned worker counts to `num_performance_cores()`, preventing dynamic multi-threading.
 
 ### 2.2. Vocabulary Head Projection Latency
 Ministral 3 3B's vocabulary size is $V = 131,072$. For each token where logits are requested, the model executes:
@@ -33,7 +33,7 @@ for r in range(v0, v1):
 Calling `dot_quant_row` per row does not reuse activation loads across rows and operates in floating-point SIMD rather than integer-domain vectorized AVX2 dot products.
 
 ### 2.3. Per-Token Single Decode Loop in Prompt Ingestion
-In [examples/chat_ministral3.mojo](file:///mnt/c/Documents/Mojo/llamojo/examples/chat_ministral3.mojo), the prompt was ingested one token at a time:
+In [examples/chat_ministral3.mojo](../../examples/chat_ministral3.mojo), the prompt was ingested one token at a time:
 ```mojo
 for i in range(n_tokens):
     var b = llama_batch_init(1, ...)
@@ -46,7 +46,7 @@ Each iteration paid the full overhead of layer-by-layer synchronization, threadp
 ## 3. Implementation Details
 
 ### 3.1. Removing Core Clamps Across Threadpool & Quantized Kernels
-In [src/llamojo/backend/threadpool.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/threadpool.mojo):
+In [src/llamojo/backend/threadpool.mojo](../../src/llamojo/backend/threadpool.mojo):
 ```mojo
 from std.sys.info import num_performance_cores, num_logical_cores
 ...
@@ -59,11 +59,11 @@ def __init__(out self, workers: Int = 0, dim: Int = 4096):
     self.initialized = True
 ```
 
-In [src/llamojo/backend/kernels_quant.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_quant.mojo):
+In [src/llamojo/backend/kernels_quant.mojo](../../src/llamojo/backend/kernels_quant.mojo):
 Updated `gemv_quant`, `gemv_gelu_biased`, and `gemv_gate_up_fused` default worker fallbacks from `num_performance_cores()` to `max(1, num_logical_cores())`.
 
 ### 3.2. Vectorized 2-Row Tiled LM-Head via `gemv_quant`
-In [src/llamojo/llama.mojo](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/llama.mojo):
+In [src/llamojo/llama.mojo](../../src/llamojo/llama.mojo):
 Replaced the manual row-by-row `dot_quant_row` loop in `llama_decode` with `gemv_quant`:
 ```mojo
 gemv_quant(
@@ -82,7 +82,7 @@ Benefits:
 - Automatically partitions the 131,072 rows across all available worker threads.
 
 ### 3.3. Batched Prompt Prefill Ingestion
-In [examples/chat_ministral3.mojo](file:///mnt/c/Documents/Mojo/llamojo/examples/chat_ministral3.mojo):
+In [examples/chat_ministral3.mojo](../../examples/chat_ministral3.mojo):
 Batched the entire prompt into a single `llama_batch` allocation:
 ```mojo
 var batch = llama_batch_init(n_tokens, embd=0, n_seq_max=1)

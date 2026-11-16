@@ -4,8 +4,8 @@
 Phase 3 builds the core transformer computation and prediction backend of the Mistral Timestral time-series foundation model in pure Mojo 1.1 (`/home/tasahi/miniconda/envs/moj/bin/mojo`), eliminating any Python or C++ runtime dependency.
 
 It implements:
-1. **Partial Rotary Positional Embedding (RoPE):** `apply_rope_partial` in [`src/llamojo/backend/kernels_norm_rope.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_norm_rope.mojo).
-2. **Time-Axis Attention with DHF Causal Mask & Sigmoid Gating:** `forward_time_attention` in [`src/llamojo/timestral/model.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/timestral/model.mojo).
+1. **Partial Rotary Positional Embedding (RoPE):** `apply_rope_partial` in [`src/llamojo/backend/kernels_norm_rope.mojo`](../../src/llamojo/backend/kernels_norm_rope.mojo).
+2. **Time-Axis Attention with DHF Causal Mask & Sigmoid Gating:** `forward_time_attention` in [`src/llamojo/timestral/model.mojo`](../../src/llamojo/timestral/model.mojo).
 3. **Cross-Variate Multi-Head Attention:** `forward_variate_attention` across rows for layers scheduled as `"time_variate"`.
 4. **Fused SwiGLU Feed-Forward Blocks:** `forward_swiglu_mlp` with $\text{gate} \cdot \text{SiLU}(\text{up})$ and down-projection.
 5. **Pre-allocated Scratchpad Arena (`TimestralState`):** Zero-allocation activation workspace for multi-layer evaluation.
@@ -59,12 +59,12 @@ To enforce strict non-crossing quantile guarantees ($q_1 \le q_2 \le \dots \le q
 
 | File | Description |
 |---|---|
-| [`src/llamojo/backend/kernels_norm_rope.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/backend/kernels_norm_rope.mojo) | Added `apply_rope_partial` kernel supporting proportional RoPE rotation. |
-| [`src/llamojo/timestral/model.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/timestral/model.mojo) | Full implementation of `TimestralState`, `forward_time_attention`, `forward_variate_attention`, `forward_swiglu_mlp`, `forward_timestral_block`, `monotone_quantiles`, `forward_quantile_head`, and `forward_timestral`. |
-| [`src/llamojo/timestral/config.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/timestral/config.mojo) | Added `.rope_dim()` calculation. |
-| [`src/llamojo/timestral/__init__.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/timestral/__init__.mojo) | Exported Phase 3 state structs, attention functions, and forward runners. |
-| [`src/llamojo/__init__.mojo`](file:///mnt/c/Documents/Mojo/llamojo/src/llamojo/__init__.mojo) | Re-exported Phase 3 APIs at the top-level package namespace. |
-| [`tests/test_timestral_phase3.mojo`](file:///mnt/c/Documents/Mojo/llamojo/tests/test_timestral_phase3.mojo) | Unit verification suite covering partial RoPE, monotonic quantiles, and end-to-end forward prediction. |
+| [`src/llamojo/backend/kernels_norm_rope.mojo`](../../src/llamojo/backend/kernels_norm_rope.mojo) | Added `apply_rope_partial` kernel supporting proportional RoPE rotation. |
+| [`src/llamojo/timestral/model.mojo`](../../src/llamojo/timestral/model.mojo) | Full implementation of `TimestralState`, `forward_time_attention`, `forward_variate_attention`, `forward_swiglu_mlp`, `forward_timestral_block`, `monotone_quantiles`, `forward_quantile_head`, and `forward_timestral`. |
+| [`src/llamojo/timestral/config.mojo`](../../src/llamojo/timestral/config.mojo) | Added `.rope_dim()` calculation. |
+| [`src/llamojo/timestral/__init__.mojo`](../../src/llamojo/timestral/__init__.mojo) | Exported Phase 3 state structs, attention functions, and forward runners. |
+| [`src/llamojo/__init__.mojo`](../../src/llamojo/__init__.mojo) | Re-exported Phase 3 APIs at the top-level package namespace. |
+| [`tests/test_timestral_phase3.mojo`](../../tests/test_timestral_phase3.mojo) | Unit verification suite covering partial RoPE, monotonic quantiles, and end-to-end forward prediction. |
 
 ---
 
