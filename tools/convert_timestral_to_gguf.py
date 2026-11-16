@@ -171,13 +171,19 @@ def write_timestral_gguf(
         
         if out_type == "f16" and not is_norm_or_bias and tensor.ndim >= 2:
             data = tensor.astype(np.float16)
+            writer.add_tensor(name, data)
         elif out_type == "q8_0" and not is_norm_or_bias and tensor.ndim >= 2:
-            # gguf writer handles raw dtype or quants
-            data = tensor.astype(np.float32)
+            # Check if columns are multiple of 32 for Q8_0 quantization
+            n_cols = tensor.shape[-1]
+            if n_cols % 32 == 0:
+                q_data = gguf.quants.quantize(tensor, gguf.GGMLQuantizationType.Q8_0)
+                writer.add_tensor(name, q_data, raw_dtype=gguf.GGMLQuantizationType.Q8_0)
+            else:
+                data = tensor.astype(np.float32)
+                writer.add_tensor(name, data)
         else:
             data = tensor.astype(np.float32)
-
-        writer.add_tensor(name, data)
+            writer.add_tensor(name, data)
 
     # 4. Finalize File
     writer.write_header_to_file()

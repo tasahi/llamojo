@@ -13,7 +13,7 @@ from std.math import asinh, sinh, isnan, isinf, sqrt
 from std.memory import Pointer, unsafe_memset_zero, unsafe_memcpy
 from std.memory.alloc import unsafe_alloc
 
-from ..types import null_ptr, GGMLType
+from ..types import null_ptr, GGMLType, ggml_type_size, ggml_block_size
 from ..backend.isa import SIMD_WIDTH, F32xW
 from ..backend.kernels_norm_rope import silu
 from ..backend.kernels_quant import BytePtr, FloatPtr, dot_quant_row
@@ -319,6 +319,16 @@ struct PatchBuffer(Movable):
         self.scale_data[unsafe_offset=idx] = scale
 
 
+@always_inline
+def _get_patch_row_ptr(weight_base: BytePtr, dtype: UInt32, row_idx: Int, n_cols: Int) -> BytePtr:
+    """ Computes the byte offset for a specific matrix row based on quantization block size."""
+    var blk_sz = Int(ggml_block_size(dtype))
+    var type_sz = Int(ggml_type_size(dtype))
+    var n_blocks = (n_cols + blk_sz - 1) // blk_sz
+    var row_bytes = n_blocks * type_sz
+    return weight_base.unsafe_offset(row_idx * row_bytes)
+
+
 def forward_patch_proj(
         weights: PatchProjWeights,
         in_vec: FloatPtr,
@@ -334,7 +344,7 @@ def forward_patch_proj(
 
     # 1. hidden = silu(hidden_layer(x))
     for j in range(hidden_dims):
-        var row_ptr = weights.hidden_w.unsafe_offset(j * in_dim * 4)  # FP32 weights
+        var row_ptr = _get_patch_row_ptr(weights.hidden_w, weights.dtype_hidden, j, in_dim)
         var dot_val = dot_quant_row(weights.dtype_hidden, row_ptr, in_vec, in_dim)
         var bias_val: Float32 = 0.0
         if Int(weights.hidden_b) != 0:
@@ -343,7 +353,7 @@ def forward_patch_proj(
 
     # 2. out = output_layer(hidden)
     for i in range(d_model):
-        var row_ptr = weights.output_w.unsafe_offset(i * hidden_dims * 4)
+        var row_ptr = _get_patch_row_ptr(weights.output_w, weights.dtype_output, i, hidden_dims)
         var dot_val = dot_quant_row(weights.dtype_output, row_ptr, scratch_hidden, hidden_dims)
         var bias_val: Float32 = 0.0
         if Int(weights.output_b) != 0:
@@ -352,7 +362,7 @@ def forward_patch_proj(
 
     # 3. res = residual_layer(x) and add to out
     for i in range(d_model):
-        var row_ptr = weights.residual_w.unsafe_offset(i * in_dim * 4)
+        var row_ptr = _get_patch_row_ptr(weights.residual_w, weights.dtype_residual, i, in_dim)
         var dot_val = dot_quant_row(weights.dtype_residual, row_ptr, in_vec, in_dim)
         var bias_val: Float32 = 0.0
         if Int(weights.residual_b) != 0:

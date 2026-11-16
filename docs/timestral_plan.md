@@ -209,6 +209,23 @@ $$\text{encoded}(c) = \frac{\text{smooth} \cdot \mu_{\text{item}} + \sum_{(t, c)
 
 ---
 
+### Gap B Remedy: Quantized Weights (Q8_0) in GGUF & Pure Mojo Inference [COMPLETED]
+*(Full documentation and schema specification in [`docs/phases/timestral_quantization.md`](./phases/timestral_quantization.md))*
+
+**Goal:** Support true 8-bit quantization (`GGMLType.Q8_0`) across all Timestral projection matrices in both the GGUF serialization tool and the pure Mojo inference engine, achieving a $3.75\times$ reduction in model file size and memory footprint.
+
+1. **GGUF Converter Support (`tools/convert_timestral_to_gguf.py`):**
+   - Configured `--precision q8_0` to quantize all 2D linear weight matrices (`patch_proj`, attention QKV/gate/output, SwiGLU MLP gate/up/down, and quantile head hidden/output/residual) to `GGMLQuantizationType.Q8_0` with `raw_dtype=Q8_0`.
+   - Maintained layer norms and 1D biases in FP32 for numerical stability.
+2. **Pure Mojo Dynamic Block Stride (`src/llamojo/timestral/patch.mojo`):**
+   - Generalized `forward_patch_proj` using `_get_patch_row_ptr` with `ggml_block_size(dtype)` and `ggml_type_size(dtype)`.
+   - All transformer projections evaluate using `dot_quant_row` / `dot_q8_0_row` SIMD kernels.
+3. **Unit Verification Suite:**
+   - Passed in [`tests/test_timestral_quant.mojo`](../tests/test_timestral_quant.mojo) verifying linear projection types, non-crossing quantiles, and causal imputation on a $400\text{ KB}$ Q8_0 model.
+
+
+---
+
 ## 6. Technical Risks & Mitigations
 
 | Risk / Challenge | Impact | Mitigation |
