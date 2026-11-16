@@ -14,6 +14,8 @@ Implements Phase 3 of the Timestral Engine:
 from std.math import sqrt, exp, log
 from std.memory import Pointer, unsafe_memset_zero, unsafe_memcpy
 from std.memory.alloc import unsafe_alloc
+from std.sys.info import num_logical_cores
+from max.algorithm import parallelize
 
 from ..types import null_ptr, GGMLType, ggml_type_size, ggml_block_size
 from ..backend.isa import SIMD_WIDTH, F32xW
@@ -56,6 +58,49 @@ def _get_row_ptr(weight_base: BytePtr, dtype: UInt32, row_idx: Int, n_cols: Int)
 
 # ─── Timestral Activation Scratchpad / State Arena ────────────────────────────
 
+struct TimestralThreadScratch(Movable):
+    """ Per-thread scratchpad for parallelized multi-variate execution."""
+    var qkv_buf: FloatPtr      # (3 * d_model)
+    var gate_buf: FloatPtr     # (d_model)
+    var attn_out: FloatPtr     # (d_model)
+    var attn_scores: FloatPtr  # (max_patches) or (max_rows)
+    var mlp_gate_up: FloatPtr  # (2 * mlp_hidden_dim)
+    var mlp_act: FloatPtr      # (mlp_hidden_dim)
+    var head_scratch: FloatPtr # (4 * d_model)
+
+    def __init__(out self, d_model: Int, mlp_hidden_dim: Int, max_dim: Int):
+        self.qkv_buf = unsafe_alloc[Float32](3 * d_model)
+        self.gate_buf = unsafe_alloc[Float32](d_model)
+        self.attn_out = unsafe_alloc[Float32](d_model)
+        self.attn_scores = unsafe_alloc[Float32](max_dim)
+        self.mlp_gate_up = unsafe_alloc[Float32](2 * mlp_hidden_dim)
+        self.mlp_act = unsafe_alloc[Float32](mlp_hidden_dim)
+        self.head_scratch = unsafe_alloc[Float32](4 * d_model)
+
+    def free(mut self):
+        if Int(self.qkv_buf) != 0:
+            self.qkv_buf.unsafe_free()
+            self.qkv_buf = null_ptr[Float32]()
+        if Int(self.gate_buf) != 0:
+            self.gate_buf.unsafe_free()
+            self.gate_buf = null_ptr[Float32]()
+        if Int(self.attn_out) != 0:
+            self.attn_out.unsafe_free()
+            self.attn_out = null_ptr[Float32]()
+        if Int(self.attn_scores) != 0:
+            self.attn_scores.unsafe_free()
+            self.attn_scores = null_ptr[Float32]()
+        if Int(self.mlp_gate_up) != 0:
+            self.mlp_gate_up.unsafe_free()
+            self.mlp_gate_up = null_ptr[Float32]()
+        if Int(self.mlp_act) != 0:
+            self.mlp_act.unsafe_free()
+            self.mlp_act = null_ptr[Float32]()
+        if Int(self.head_scratch) != 0:
+            self.head_scratch.unsafe_free()
+            self.head_scratch = null_ptr[Float32]()
+
+
 struct TimestralState(Movable):
     """ Pre-allocated scratchpad buffers for evaluating Timestral transformer blocks."""
     var max_rows: Int
@@ -64,6 +109,7 @@ struct TimestralState(Movable):
     var num_heads: Int
     var head_dim: Int
     var mlp_hidden_dim: Int
+    var n_workers: Int
 
     var norm_x: FloatPtr       # (max_rows * max_patches, d_model)
     var qkv_buf: FloatPtr      # (3 * d_model)
@@ -74,6 +120,7 @@ struct TimestralState(Movable):
     var mlp_act: FloatPtr      # (mlp_hidden_dim)
     var mlp_out: FloatPtr      # (d_model)
     var head_scratch: FloatPtr # (4 * d_model)
+    var thread_scratches: Pointer[TimestralThreadScratch, MutUntrackedOrigin]
 
     def __init__(out self, config: TimestralConfig, max_rows: Int = 16, max_patches: Int = 128):
         self.max_rows = max_rows
@@ -96,6 +143,14 @@ struct TimestralState(Movable):
         self.mlp_act = unsafe_alloc[Float32](self.mlp_hidden_dim)
         self.mlp_out = unsafe_alloc[Float32](self.d_model)
         self.head_scratch = unsafe_alloc[Float32](4 * self.d_model)
+
+        var hw_cores = num_logical_cores()
+        self.n_workers = max(1, hw_cores)
+        self.thread_scratches = unsafe_alloc[TimestralThreadScratch](self.n_workers)
+        for w in range(self.n_workers):
+            self.thread_scratches.unsafe_offset(w).unsafe_write(
+                TimestralThreadScratch(self.d_model, self.mlp_hidden_dim, max_dim)
+            )
 
     def free(mut self):
         if Int(self.norm_x) != 0:
@@ -125,6 +180,13 @@ struct TimestralState(Movable):
         if Int(self.head_scratch) != 0:
             self.head_scratch.unsafe_free()
             self.head_scratch = null_ptr[Float32]()
+        if Int(self.thread_scratches) != 0:
+            for w in range(self.n_workers):
+                self.thread_scratches.unsafe_offset(w)[].free()
+                self.thread_scratches.unsafe_offset(w).unsafe_deinit_pointee()
+            self.thread_scratches.unsafe_free()
+            var z: Int = 0
+            self.thread_scratches = Pointer[TimestralThreadScratch, MutUntrackedOrigin](unsafe_from_address=z)
 
 
 # ─── Softmax Helper ──────────────────────────────────────────────────────────
@@ -183,113 +245,123 @@ def forward_time_attention(
     var inv_scale = Float32(1.0) / sqrt(Float32(head_dim))
     var has_gate = Int(attn.gate_w) != 0
 
-    var q_all = unsafe_alloc[Float32](n_patches * d_model)
-    var k_all = unsafe_alloc[Float32](n_patches * d_model)
-    var v_all = unsafe_alloc[Float32](n_patches * d_model)
-    var row_norm = unsafe_alloc[Float32](n_patches * d_model)
+    var n_workers = min(state.n_workers, n_rows)
 
-    for r in range(n_rows):
-        var row_offset = r * n_patches * d_model
+    def row_worker(wid: Int) {imm}:
+        var r_start = wid * ((n_rows + n_workers - 1) // n_workers)
+        var r_end = min(r_start + ((n_rows + n_workers - 1) // n_workers), n_rows)
+        if r_start >= r_end:
+            return
 
-        # 1. Compute Pre-RMSNorm and Q, K, V for all patches in this row
-        for p in range(n_patches):
-            var x_ptr = tokens_in.unsafe_offset(row_offset + p * d_model)
-            var norm_ptr = row_norm.unsafe_offset(p * d_model)
-            rms_norm(norm_ptr, x_ptr, attn.norm_w, d_model, config.norm_eps)
+        var sc = state.thread_scratches.unsafe_offset(wid)
+        var q_all = unsafe_alloc[Float32](n_patches * d_model)
+        var k_all = unsafe_alloc[Float32](n_patches * d_model)
+        var v_all = unsafe_alloc[Float32](n_patches * d_model)
+        var row_norm = unsafe_alloc[Float32](n_patches * d_model)
 
-            # Compute QKV: wQKV shape is (3 * d_model, d_model)
-            for row_qkv in range(3 * d_model):
-                var rptr = _get_row_ptr(attn.qkv_w, attn.dtype_qkv, row_qkv, d_model)
-                var dot_v = dot_quant_row(attn.dtype_qkv, rptr, norm_ptr, d_model)
-                state.qkv_buf[unsafe_offset=row_qkv] = dot_v
+        for r in range(r_start, r_end):
+            var row_offset = r * n_patches * d_model
 
-            # Map from wQKV layout: row = (chunk * head_dim + d) * num_heads + h
-            for h in range(num_heads):
-                for d in range(head_dim):
-                    var row_q = (0 * head_dim + d) * num_heads + h
-                    var row_k = (1 * head_dim + d) * num_heads + h
-                    var row_v = (2 * head_dim + d) * num_heads + h
+            # 1. Compute Pre-RMSNorm and Q, K, V for all patches in this row
+            for p in range(n_patches):
+                var x_ptr = tokens_in.unsafe_offset(row_offset + p * d_model)
+                var norm_ptr = row_norm.unsafe_offset(p * d_model)
+                rms_norm(norm_ptr, x_ptr, attn.norm_w, d_model, config.norm_eps)
 
-                    var head_idx = (p * num_heads + h) * head_dim + d
-                    q_all[unsafe_offset=head_idx] = state.qkv_buf[unsafe_offset=row_q]
-                    k_all[unsafe_offset=head_idx] = state.qkv_buf[unsafe_offset=row_k]
-                    v_all[unsafe_offset=head_idx] = state.qkv_buf[unsafe_offset=row_v]
+                # Compute QKV: wQKV shape is (3 * d_model, d_model)
+                for row_qkv in range(3 * d_model):
+                    var rptr = _get_row_ptr(attn.qkv_w, attn.dtype_qkv, row_qkv, d_model)
+                    var dot_v = dot_quant_row(attn.dtype_qkv, rptr, norm_ptr, d_model)
+                    sc[].qkv_buf[unsafe_offset=row_qkv] = dot_v
 
-            # Apply partial RoPE to Q and K for this patch position `p`
-            for h in range(num_heads):
-                var q_head = q_all.unsafe_offset((p * num_heads + h) * head_dim)
-                var k_head = k_all.unsafe_offset((p * num_heads + h) * head_dim)
-                apply_rope_partial(
-                    q=q_head,
-                    k=k_head,
-                    n_heads=1,
-                    n_kv_heads=1,
-                    head_dim=head_dim,
-                    rope_dim=rope_dim,
-                    pos=p,
-                    rope_theta=config.rope_theta,
-                )
-
-        # 2. Scaled Dot-Product Attention for each query patch `qp`
-        for qp in range(n_patches):
-            var norm_ptr = row_norm.unsafe_offset(qp * d_model)
-
-            # If sdpa_sigmoid gate is present, compute sigmoid(W_gate @ norm_ptr)
-            if has_gate:
-                for row_g in range(d_model):
-                    var rptr = _get_row_ptr(attn.gate_w, attn.dtype_gate, row_g, d_model)
-                    var dot_g = dot_quant_row(attn.dtype_gate, rptr, norm_ptr, d_model)
-                    state.gate_buf[unsafe_offset=row_g] = _sigmoid(dot_g)
-
-            # Determine valid key range under DHF rule:
-            # Context queries (qp < n_hist_patches): attend to keys kp <= qp
-            # Horizon queries (qp >= n_hist_patches): attend to all context keys (0..n_hist_patches-1)
-            # and causally to horizon keys (n_hist_patches..qp)
-            var max_key = qp + 1
-
-            for h in range(num_heads):
-                var q_head = q_all.unsafe_offset((qp * num_heads + h) * head_dim)
-                var out_head = state.attn_out.unsafe_offset(h * head_dim)
-
-                # Compute attention scores for allowed keys
-                var score_idx = 0
-                for kp in range(max_key):
-                    var k_head = k_all.unsafe_offset((kp * num_heads + h) * head_dim)
-                    var score: Float32 = 0.0
+                # Map from wQKV layout: row = (chunk * head_dim + d) * num_heads + h
+                for h in range(num_heads):
                     for d in range(head_dim):
-                        score += q_head[unsafe_offset=d] * k_head[unsafe_offset=d]
-                    state.attn_scores[unsafe_offset=score_idx] = score * inv_scale
-                    score_idx += 1
+                        var row_q = (0 * head_dim + d) * num_heads + h
+                        var row_k = (1 * head_dim + d) * num_heads + h
+                        var row_v = (2 * head_dim + d) * num_heads + h
 
-                # Softmax over active scores
-                _softmax(state.attn_scores, score_idx)
+                        var head_idx = (p * num_heads + h) * head_dim + d
+                        q_all[unsafe_offset=head_idx] = sc[].qkv_buf[unsafe_offset=row_q]
+                        k_all[unsafe_offset=head_idx] = sc[].qkv_buf[unsafe_offset=row_k]
+                        v_all[unsafe_offset=head_idx] = sc[].qkv_buf[unsafe_offset=row_v]
 
-                # Weighted sum over values
-                for d in range(head_dim):
-                    out_head[unsafe_offset=d] = 0.0
+                # Apply partial RoPE to Q and K for this patch position `p`
+                for h in range(num_heads):
+                    var q_head = q_all.unsafe_offset((p * num_heads + h) * head_dim)
+                    var k_head = k_all.unsafe_offset((p * num_heads + h) * head_dim)
+                    apply_rope_partial(
+                        q=q_head,
+                        k=k_head,
+                        n_heads=1,
+                        n_kv_heads=1,
+                        head_dim=head_dim,
+                        rope_dim=rope_dim,
+                        pos=p,
+                        rope_theta=config.rope_theta,
+                    )
 
-                for kp in range(score_idx):
-                    var weight = state.attn_scores[unsafe_offset=kp]
-                    var v_head = v_all.unsafe_offset((kp * num_heads + h) * head_dim)
+            # 2. Scaled Dot-Product Attention for each query patch `qp`
+            for qp in range(n_patches):
+                var norm_ptr = row_norm.unsafe_offset(qp * d_model)
+
+                # If sdpa_sigmoid gate is present, compute sigmoid(W_gate @ norm_ptr)
+                if has_gate:
+                    for row_g in range(d_model):
+                        var rptr = _get_row_ptr(attn.gate_w, attn.dtype_gate, row_g, d_model)
+                        var dot_g = dot_quant_row(attn.dtype_gate, rptr, norm_ptr, d_model)
+                        sc[].gate_buf[unsafe_offset=row_g] = _sigmoid(dot_g)
+
+                var max_key = qp + 1
+
+                for h in range(num_heads):
+                    var q_head = q_all.unsafe_offset((qp * num_heads + h) * head_dim)
+                    var out_head = sc[].attn_out.unsafe_offset(h * head_dim)
+
+                    # Compute attention scores for allowed keys
+                    var score_idx = 0
+                    for kp in range(max_key):
+                        var k_head = k_all.unsafe_offset((kp * num_heads + h) * head_dim)
+                        var score: Float32 = 0.0
+                        for d in range(head_dim):
+                            score += q_head[unsafe_offset=d] * k_head[unsafe_offset=d]
+                        sc[].attn_scores[unsafe_offset=score_idx] = score * inv_scale
+                        score_idx += 1
+
+                    # Softmax over active scores
+                    _softmax(sc[].attn_scores, score_idx)
+
+                    # Weighted sum over values
                     for d in range(head_dim):
-                        out_head[unsafe_offset=d] += weight * v_head[unsafe_offset=d]
+                        out_head[unsafe_offset=d] = 0.0
 
-            # If gated, multiply element-wise by sigmoid(gate)
-            if has_gate:
-                for d in range(d_model):
-                    state.attn_out[unsafe_offset=d] *= state.gate_buf[unsafe_offset=d]
+                    for kp in range(score_idx):
+                        var weight = sc[].attn_scores[unsafe_offset=kp]
+                        var v_head = v_all.unsafe_offset((kp * num_heads + h) * head_dim)
+                        for d in range(head_dim):
+                            out_head[unsafe_offset=d] += weight * v_head[unsafe_offset=d]
 
-            # Output projection W_o: out = W_o @ attn_out
-            var out_token = tokens_out.unsafe_offset(row_offset + qp * d_model)
-            for row_o in range(d_model):
-                var rptr = _get_row_ptr(attn.o_w, attn.dtype_o, row_o, d_model)
-                var dot_o = dot_quant_row(attn.dtype_o, rptr, state.attn_out, d_model)
-                out_token[unsafe_offset=row_o] += dot_o
+                # If gated, multiply element-wise by sigmoid(gate)
+                if has_gate:
+                    for d in range(d_model):
+                        sc[].attn_out[unsafe_offset=d] *= sc[].gate_buf[unsafe_offset=d]
 
-    q_all.unsafe_free()
-    k_all.unsafe_free()
-    v_all.unsafe_free()
-    row_norm.unsafe_free()
+                # Output projection W_o: out = W_o @ attn_out
+                var out_token = tokens_out.unsafe_offset(row_offset + qp * d_model)
+                for row_o in range(d_model):
+                    var rptr = _get_row_ptr(attn.o_w, attn.dtype_o, row_o, d_model)
+                    var dot_o = dot_quant_row(attn.dtype_o, rptr, sc[].attn_out, d_model)
+                    out_token[unsafe_offset=row_o] += dot_o
+
+        q_all.unsafe_free()
+        k_all.unsafe_free()
+        v_all.unsafe_free()
+        row_norm.unsafe_free()
+
+    if n_workers > 1:
+        parallelize(row_worker, n_workers, n_workers)
+    else:
+        row_worker(0)
 
 
 # ─── Variate-Axis Multi-Head Attention (Cross-Variate) ────────────────────────
@@ -407,30 +479,43 @@ def forward_swiglu_mlp(
     """
     var d_model = config.d_model
     var hidden_dim = config.mlp_hidden_dim
+    var n_workers = min(state.n_workers, n_tokens)
 
-    for t in range(n_tokens):
-        var x_ptr = tokens_in.unsafe_offset(t * d_model)
-        var norm_ptr = state.norm_x.unsafe_offset(t * d_model)
-        rms_norm(norm_ptr, x_ptr, lw.ffn_norm_w, d_model, config.norm_eps)
+    def mlp_worker(wid: Int) {imm}:
+        var t_start = wid * ((n_tokens + n_workers - 1) // n_workers)
+        var t_end = min(t_start + ((n_tokens + n_workers - 1) // n_workers), n_tokens)
+        if t_start >= t_end:
+            return
 
-        # 2. Gate + Up: shape (2 * hidden_dim, d_model)
-        for r in range(2 * hidden_dim):
-            var rptr = _get_row_ptr(lw.ffn_gate_up_w, lw.dtype_gate_up, r, d_model)
-            var dot_val = dot_quant_row(lw.dtype_gate_up, rptr, norm_ptr, d_model)
-            state.mlp_gate_up[unsafe_offset=r] = dot_val
+        var sc = state.thread_scratches.unsafe_offset(wid)
+        for t in range(t_start, t_end):
+            var x_ptr = tokens_in.unsafe_offset(t * d_model)
+            var norm_ptr = state.norm_x.unsafe_offset(t * d_model)
+            rms_norm(norm_ptr, x_ptr, lw.ffn_norm_w, d_model, config.norm_eps)
 
-        # 3. Activation: gate = [0..hidden_dim-1], up = [hidden_dim..2*hidden_dim-1]
-        for i in range(hidden_dim):
-            var gate_val = state.mlp_gate_up[unsafe_offset=i]
-            var up_val = state.mlp_gate_up[unsafe_offset=hidden_dim + i]
-            state.mlp_act[unsafe_offset=i] = gate_val * silu(up_val)
+            # 2. Gate + Up: shape (2 * hidden_dim, d_model)
+            for r in range(2 * hidden_dim):
+                var rptr = _get_row_ptr(lw.ffn_gate_up_w, lw.dtype_gate_up, r, d_model)
+                var dot_val = dot_quant_row(lw.dtype_gate_up, rptr, norm_ptr, d_model)
+                sc[].mlp_gate_up[unsafe_offset=r] = dot_val
 
-        # 4. Down: shape (d_model, hidden_dim)
-        var out_ptr = tokens_out.unsafe_offset(t * d_model)
-        for r in range(d_model):
-            var rptr = _get_row_ptr(lw.ffn_down_w, lw.dtype_down, r, hidden_dim)
-            var dot_down = dot_quant_row(lw.dtype_down, rptr, state.mlp_act, hidden_dim)
-            out_ptr[unsafe_offset=r] += dot_down
+            # 3. Activation: gate = [0..hidden_dim-1], up = [hidden_dim..2*hidden_dim-1]
+            for i in range(hidden_dim):
+                var gate_val = sc[].mlp_gate_up[unsafe_offset=i]
+                var up_val = sc[].mlp_gate_up[unsafe_offset=hidden_dim + i]
+                sc[].mlp_act[unsafe_offset=i] = gate_val * silu(up_val)
+
+            # 4. Down: shape (d_model, hidden_dim)
+            var out_ptr = tokens_out.unsafe_offset(t * d_model)
+            for r in range(d_model):
+                var rptr = _get_row_ptr(lw.ffn_down_w, lw.dtype_down, r, hidden_dim)
+                var dot_down = dot_quant_row(lw.dtype_down, rptr, sc[].mlp_act, hidden_dim)
+                out_ptr[unsafe_offset=r] += dot_down
+
+    if n_workers > 1:
+        parallelize(mlp_worker, n_workers, n_workers)
+    else:
+        mlp_worker(0)
 
 
 # ─── Full Timestral Transformer Block ────────────────────────────────────────
