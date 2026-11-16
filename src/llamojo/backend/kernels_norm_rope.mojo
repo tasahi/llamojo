@@ -502,6 +502,51 @@ def apply_rope_neox(
             k_head[unsafe_offset=i + half_dim] = k0 * sin_a + k1 * cos_a
 
 
+@always_inline
+def apply_rope_partial(
+        q: FloatPtr,
+        k: FloatPtr,
+        n_heads: Int,
+        n_kv_heads: Int,
+        head_dim: Int,
+        rope_dim: Int,
+        pos: Int,
+        rope_theta: Float32 = 10000.0,
+    ):
+    """ Apply partial RoPE rotation (NeoX style) matching Timestral / SinCosRoPE.
+    Only the first `rope_dim` dimensions of each head rotate (pairs (i, i + head_dim//2) for i < rope_dim//2).
+    The remaining dimensions are left completely unrotated (identity rotation).
+    """
+    var inv_theta = Float32(1.0) / rope_theta
+    var half_head = head_dim // 2
+    var rot_half = (rope_dim // 2) if (rope_dim > 0 and rope_dim < head_dim) else half_head
+
+    for h in range(n_heads):
+        var q_head = q.unsafe_offset(h * head_dim)
+        for i in range(rot_half):
+            var freq = pow(inv_theta, Float32(i * 2) / Float32(rope_dim))
+            var angle = Float32(pos) * freq
+            var cos_a = cos(angle)
+            var sin_a = sin(angle)
+            var q0 = q_head[unsafe_offset=i]
+            var q1 = q_head[unsafe_offset=i + half_head]
+            q_head[unsafe_offset=i] = q0 * cos_a - q1 * sin_a
+            q_head[unsafe_offset=i + half_head] = q0 * sin_a + q1 * cos_a
+
+    for h in range(n_kv_heads):
+        var k_head = k.unsafe_offset(h * head_dim)
+        for i in range(rot_half):
+            var freq = pow(inv_theta, Float32(i * 2) / Float32(rope_dim))
+            var angle = Float32(pos) * freq
+            var cos_a = cos(angle)
+            var sin_a = sin(angle)
+            var k0 = k_head[unsafe_offset=i]
+            var k1 = k_head[unsafe_offset=i + half_head]
+            k_head[unsafe_offset=i] = k0 * cos_a - k1 * sin_a
+            k_head[unsafe_offset=i + half_head] = k0 * sin_a + k1 * cos_a
+
+
+
 # ─── YaRN (Yet another RoPE extensioN) Implementation ────────────────────────
 
 @always_inline
@@ -630,4 +675,3 @@ def apply_rope_yarn(
 
     cos_arr.unsafe_free()
     sin_arr.unsafe_free()
-

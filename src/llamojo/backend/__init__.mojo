@@ -53,6 +53,7 @@ from .kernels_norm_rope import (
     rope_head,
     apply_rope_norm,
     apply_rope_neox,
+    apply_rope_partial,
     apply_rope_yarn,
     rope_yarn_corr_factor,
     rope_yarn_corr_dims,
@@ -117,4 +118,3 @@ from .micro_arch import (
     numa_pin_thread,
     numa_node_count,
 )
-

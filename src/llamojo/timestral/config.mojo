@@ -135,3 +135,11 @@ struct TimestralConfig(Copyable, Movable):
     def num_quantiles(self) -> Int:
         """ Return number of quantile knots (typically 21)."""
         return len(self.quantile_knots)
+
+    def rope_dim(self) -> Int:
+        """ Return number of rotated dimensions per head (rope_partial_factor * head_dim)."""
+        var r = Int(Float32(self.head_dim) * self.rope_partial_factor)
+        # Ensure even number
+        if r % 2 != 0:
+            r -= 1
+        return r

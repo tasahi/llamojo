@@ -130,23 +130,25 @@ tests/
 
 ---
 
-### Phase 3: Backend Kernel Extensions & Dual-Axis Attention (`model.mojo`)
+### Phase 3: Backend Kernel Extensions & Dual-Axis Attention (`model.mojo`) [COMPLETED]
+*(Full documentation and schema specification in [`docs/phases/timestral_phase3.md`](./phases/timestral_phase3.md))*
+
 **Goal:** Extend `llamojo`'s SIMD kernels where needed and build the Timestral transformer forward pass.
 
 1. **Partial RoPE (`src/llamojo/backend/kernels_norm_rope.mojo`):**
-   - Add `apply_rope_partial(q, k, pos, head_dim, rope_dim, theta)` where `rope_dim = Int(Float32(head_dim) * rope_partial_factor)`. Only the first `rope_dim` elements undergo rotary rotation; the remaining elements pass through unchanged.
+   - Implemented `apply_rope_partial` where `rope_dim = Int(Float32(head_dim) * rope_partial_factor)`. Rotates pairs $(i, i + \frac{head\_dim}{2})$ for $i < \frac{rope\_dim}{2}$, leaving the remaining dimensions unrotated.
 2. **SDPA Sigmoid Gating:**
-   - Compute `gate = sigmoid(W_gate @ x)` alongside QKV projections and apply element-wise multiplication to the attention output before the output projection `W_o`.
+   - Evaluates $\sigma(W_{\text{gate}} x_{\text{normed}})$ and applies element-wise gating to attention outputs before output projection $W_O$.
 3. **Time-Axis Attention (`forward_time_attention`):**
-   - Runs independently for each `(Batch, Variate)` slice across the $N_{\text{patches}}$ temporal tokens.
-   - Applies **DHF attention rules** (`split_context_horizon_attn`): historical patches attend causally to prior historical patches, while horizon prediction patches attend to the full historical context without leaking future target tokens.
+   - Multi-head attention across temporal patch sequences with DHF TwoStreamMask rules (causal historical context, full historical context reading for horizon queries) and residual accumulation.
 4. **Variate-Axis Attention (`forward_variate_attention`):**
-   - Triggered on layers marked `"time_variate"` in `block_schedule`.
-   - Transposes the tensor view logically from `(B, V, N_patches, d_model)` to `(B * N_patches, V, d_model)` and runs unmasked multi-head self-attention across the `V` variates (capturing cross-sensor correlations such as vibration $\leftrightarrow$ temperature, or covariate $\leftrightarrow$ target dependencies).
-   - Dispatches across cores via `LlamaWorkerPool` / `parallelize`.
-5. **Quantile Projection Head:**
-   - Applies final `rms_norm` on the horizon patch hidden states and projects `d_model -> patch_size * 21` via `gemv_quant` / `dot_quant_row`.
-   - Slices the first $H$ steps and applies inverse `asinh` scaling to yield `(B, V, H, 21)`.
+   - Logically permutes $(R, N, D) \to (N, R, D)$, executing unmasked multi-head self-attention across series variates for `"time_variate"` layers.
+5. **Fused SwiGLU MLP:**
+   - Implemented `forward_swiglu_mlp` evaluating $\text{down}(\text{gate} \cdot \text{SiLU}(\text{up}))$ with residual addition.
+6. **Quantile Projection Head & Monotone Cumsum:**
+   - Implemented `monotone_quantiles` with free median channel and softplus width cumsum fan-out ensuring strict non-crossing guarantees ($q_1 \le q_2 \le \dots \le q_{21}$), followed by `invert_affine_asinh` denormalization.
+7. **Unit Verification Suite:** Passing in [`tests/test_timestral_phase3.mojo`](../tests/test_timestral_phase3.mojo).
+
 
 ---
 
