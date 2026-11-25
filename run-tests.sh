@@ -23,6 +23,7 @@ TESTS=(
     "tests/test_whisper_phase3.mojo"
     "tests/test_whisper_phase4.mojo"
     "tests/test_whisper_phase5.mojo"
+    "tests/test_gemma4_audio_phase1.mojo"
 )
 
 echo "============================================================"

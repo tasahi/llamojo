@@ -81,6 +81,7 @@ Detailed architectural studies of tokenization algorithms (Byte-level BPE, Sente
 | [**mmBERT / Gemma 2 Tokenizer Feasibility**](./mmbert_gemma2_tokenizer_feasibility.md) | `concept` | Completed | Engineering study for supporting 256,016-vocabulary multilingual SentencePiece tokenizers in pure Mojo. |
 | [**ModernBERT & Laya Inference Engine Plan**](./modernbert_laya_inference_plan.md) | `howto` | Completed | Inference specification for bidirectional attention, alternating sliding windows, and Laya decision scoring heads. |
 | [**Whisper ASR Integration Study**](./whisper_integration_study.md) | `concept` | Active | Feasibility study of `whisper.cpp` architecture, component reuse in `llamojo`, and comparison of integrated vs. standalone implementations. |
+| [**Gemma 4 E2B Audio Transcription Implementation Plan**](./phases/gemma4_audio_transcription_plan.md) | `howto` | Active | Phased engineering blueprint for pure-Mojo Gemma 4 E2B (`gemma4a`) Conformer audio encoding, `mmproj` GGUF loading, and multimodal ASR transcription. |
 | [**Ministral 3 3B Feasibility Study & Implementation Plan**](./ministral_3b_feasibility_and_implementation_plan.md) | `concept` | Active | Feasibility study, architectural analysis, and implementation roadmap for Ministral 3 3B (GQA, YaRN RoPE, SWA, and Pixtral vision). |
 
 ---

@@ -29,6 +29,8 @@ entries:
   - whisper_phase3_implementation.md
   - whisper_phase4_implementation.md
   - whisper_phase5_implementation.md
+  - gemma4_audio_transcription_plan.md
+  - gemma4_audio_phase1_implementation.md
   - phase1_ministral3_implementation_report.md
   - phase2_ministral3_implementation_report.md
   - phase3_ministral3_implementation_report.md
@@ -104,6 +106,16 @@ Integrating OpenAI Whisper Encoder-Decoder speech recognition models natively in
 | [**Whisper Support: Phase 3**](./whisper_phase3_implementation.md) | `reference` | Completed | Dual Model Loader: zero-copy `mmap64` support for legacy `whisper.cpp` `.bin` (`0x67676d6c`) and GGUF v2/v3 models, plus dynamic special/timestamp vocab. |
 | [**Whisper Support: Phase 4**](./whisper_phase4_implementation.md) | `reference` | Completed | Audio Encoder, static Cross-Attention KV precomputation (`kv_cross`), and Autoregressive Text Decoder (`whisper_encode`, `whisper_decode`). |
 | [**Whisper Support: Phase 5**](./whisper_phase5_implementation.md) | `reference` | Completed | Paired timestamp logit rules (`ApplyTimestampRules`), 30s seek loop (`whisper_full`), C-ABI exports, and Python `Whisper` / `LlamojoForSpeechSeq2Seq`. |
+
+---
+
+## 🎧 5b. Gemma 4 E2B Audio (`gemma4a`) Series
+Adding native pure-Mojo audio transcription (ASR), speech translation, and speech QA to Gemma 4 E2B via the 128-bin HTK Log-Mel frontend, `mmproj` `ClippableLinear` GGUF loader, 12-layer USM Conformer encoder, and multimodal `batch.embd` + PLE decoder integration.
+
+| Document | Type | Status | Technical Focus |
+|---|---|---|---|
+| [**Gemma 4 E2B Audio Transcription Plan**](./gemma4_audio_transcription_plan.md) | `howto` | Active | Master 6-phase engineering blueprint for `gemma4a` audio preprocessing, Conformer encoding, and multimodal PLE decoding. |
+| [**Gemma 4 Audio: Phase 1**](./gemma4_audio_phase1_implementation.md) | `reference` | Completed | Pure-Mojo `gemma4a` DSP frontend: 320-sample periodic Hann window, 512-pt radix-2 FFT, 128-bin HTK Mel filterbank, semicausal padding, and 30s chunking. |
 
 ---
 
